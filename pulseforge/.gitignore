@@ -1,0 +1,13 @@
+# Build output
+bin/
+build/
+
+# Object files / binaries
+*.o
+*.a
+*.so
+*.out
+
+# Core dumps
+core
+core.*
