@@ -14,12 +14,7 @@ only** - this is **not** production trading software.
 
 ## Architecture
 
-```
- UDP publisher ──UDP──> receiver ──> bounded queue ──> worker thread(s)
-                                │        (mutex+condvar OR lock-free SPSC)
-                                │
-                                └──> shared memory (mmap + atomics) ──> monitor
-```
+![PulseForge architecture diagram](image/image.png)
 
 **Phase 2 (current)** is the full pipeline above, built from four
 moving parts:
