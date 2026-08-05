@@ -1,6 +1,6 @@
 # Makefile - PulseForge: miniature low-latency market-data pipeline (learning lab).
 #
-# Phase 2 builds:
+# Phase 1 builds:
 #   bin/publisher   - UDP tick publisher
 #   bin/receiver    - UDP receiver + mutex/condvar queue + workers + shared stats
 #   bin/monitor     - shared-memory dashboard (separate process)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_basic.sh - start the full Phase 2 pipeline:
+# run_basic.sh - start the full Phase 1 pipeline:
 #   receiver (mutex queue) + monitor + publisher, then tear it down.
 #
 # Usage: bash scripts/run_basic.sh [PORT]

@@ -16,7 +16,7 @@ only** - this is **not** production trading software.
 
 ![PulseForge architecture diagram](image/image.png)
 
-**Phase 2 (current)** is the full pipeline above, built from four
+**Phase 1 (current)** is the full pipeline above, built from four
 moving parts:
 
 1. **UDP publisher** (`bin/publisher`) - synthesizes fixed-size
@@ -48,7 +48,7 @@ moving parts:
    (creates and unlinks the object); the monitor is a guest
    (open/close only, never unlinks).
 
-Cross-cutting Phase 2 concerns:
+Cross-cutting Phase 1 concerns:
 
 - Every counter that crosses threads or processes is a C11 `_Atomic
   uint64_t`. Receiver-written and worker-written counters are padded

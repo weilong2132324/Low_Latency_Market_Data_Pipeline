@@ -1,7 +1,7 @@
 /*
  * receiver.c - UDP tick receiver for the PulseForge lab.
  *
- * Responsibility (Phase 2): bind a UDP socket, receive fixed-size
+ * Responsibility (Phase 1): bind a UDP socket, receive fixed-size
  * TickMessages, validate them, detect sequence gaps, enqueue them into a
  * bounded mutex+condvar queue, and let worker threads fold them into
  * shared-memory statistics that a separate monitor process displays.
