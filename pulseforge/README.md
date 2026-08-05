@@ -21,9 +21,50 @@ only** - this is **not** production trading software.
                                 └──> shared memory (mmap + atomics) ──> monitor
 ```
 
-**Phase 2 (current):** publisher + receiver over UDP on `127.0.0.1`,
-a mutex + condition-variable bounded queue, worker threads, and a
-separate monitor process that reads shared-memory statistics.
+**Phase 2 (current)** is the full pipeline above, built from four
+moving parts:
+
+1. **UDP publisher** (`bin/publisher`) - synthesizes fixed-size
+   `TickMessage`s (a 40-byte struct: sequence, send timestamp, symbol,
+   price, quantity, flags) and sends them over UDP on `127.0.0.1`. It
+   paces to a target rate (best effort), can deliberately *skip* every
+   Nth sequence (`--drop-every`) to simulate packet loss, and can send
+   in bursts (`--burst`) within each pacing step.
+
+2. **UDP receiver** (`bin/receiver`) - binds the loopback socket
+   (`SO_REUSEADDR` + a 4 MiB `SO_RCVBUF`; the kernel socket buffer acts
+   as the *first* queue ahead of the bounded one). It validates each
+   datagram (exact 40-byte size, then `message_is_valid()`: nonzero
+   quantity, known flag bits), detects **sequence gaps** and **reorders**
+   against the last-seen sequence, then enqueues the tick into a bounded
+   queue with backpressure.
+
+3. **Bounded queue + workers** - a mutex + two-condition-variable FIFO
+   (capacity 4096, MPSC-safe). The receiver is the single producer; N
+   worker threads (`--workers`) are the consumers. Workers fold each
+   message into the shared statistics (processed count, latency
+   total/max, queue-depth gauge) and may be throttled with
+   `--slow-consumer-us` as fault injection. Shutdown is a clean
+   "close the queue -> drain remaining items -> join workers" sequence.
+
+4. **Shared-memory monitor** (`bin/monitor`) - a *separate process* that
+   opens the stats region (`shm_open` + `mmap MAP_SHARED`) and renders a
+   live dashboard once per second. The receiver is the **owner**
+   (creates and unlinks the object); the monitor is a guest
+   (open/close only, never unlinks).
+
+Cross-cutting Phase 2 concerns:
+
+- Every counter that crosses threads or processes is a C11 `_Atomic
+  uint64_t`. Receiver-written and worker-written counters are padded
+  onto separate cache lines to avoid **false sharing**, and a runtime
+  check verifies the atomics are truly lock-free on this platform.
+- Signal handling deliberately omits `SA_RESTART` so a blocking
+  `recvfrom()` is interrupted (returns `EINTR`), letting the receiver
+  observe `Ctrl-C` and shut down cleanly instead of spinning or hanging.
+- All sockets, threads, and shared-memory resources use the `CHECK()` +
+  `goto cleanup` pattern from `common.h`, so every exit path unwinds
+  cleanly.
 
 ## Prerequisites
 
