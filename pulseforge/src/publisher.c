@@ -106,6 +106,7 @@ int main(int argc, char **argv) {
     memset(&dst, 0, sizeof(dst));
     dst.sin_family = AF_INET;
     dst.sin_port = htons((uint16_t)cfg.port);
+
     if (inet_pton(AF_INET, "127.0.0.1", &dst.sin_addr) != 1) {
         fprintf(stderr, "inet_pton failed for 127.0.0.1\n");
         rc = EXIT_CFG;
@@ -117,13 +118,6 @@ int main(int argc, char **argv) {
            "  symbol %u  drop-every %" PRIu64 "  burst %" PRIu64 "\n",
            cfg.port, cfg.rate, cfg.count, cfg.symbol_id, cfg.drop_every, cfg.burst);
 
-    /*
-     * Pacing: sleep once per burst, using an absolute deadline so errors
-     * do not accumulate (drift-free). NOTE: sleep-based pacing is only
-     * accurate to roughly the scheduler's timer resolution (typically
-     * tens of microseconds) - good enough for a demo, not for a real
-     * low-latency system, which would use busy-poll or a hardware timer.
-     */
     uint64_t interval_ns = cfg.burst * 1000000000ULL / cfg.rate;
     uint64_t deadline_ns = now_ns();
     uint64_t start_ns    = now_ns();
@@ -172,6 +166,7 @@ int main(int argc, char **argv) {
     printf("Publish complete: generated %" PRIu64 "  sent %" PRIu64
            "  dropped %" PRIu64 "  send errors %" PRIu64 "\n",
            cfg.count, sent, dropped, send_errors);
+
     printf("  elapsed %.3f s  average %.0f msgs/s\n",
            elapsed_s,
            elapsed_s > 0.0 ? (double)sent / elapsed_s : 0.0);
