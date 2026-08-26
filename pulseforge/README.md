@@ -1,12 +1,13 @@
 # PulseForge
 
-A small but serious **C learning codebase**: a miniature low-latency
+A small but serious **C++ learning codebase**: a miniature low-latency
 market-data pipeline and debugging lab. Built for **educational purposes
 only** - this is **not** production trading software.
 
-- **Language:** C11
+- **Language:** C++17 (`std::atomic`, `std::thread`, `std::mutex`,
+  `std::condition_variable`, RAII)
 - **Platform:** Linux / POSIX (sockets, pthreads, mmap, fork, epoll)
-- **Build:** `gcc` + `make` only, no external libraries
+- **Build:** `g++` + `make` only, no external libraries
 - **Warnings are errors:** `-Wall -Wextra -Wpedantic -Werror`
 
 > Running on Windows? Use **WSL (Ubuntu)** - every API used here is
@@ -50,16 +51,20 @@ moving parts:
 
 Cross-cutting Phase 1 concerns:
 
-- Every counter that crosses threads or processes is a C11 `_Atomic
-  uint64_t`. Receiver-written and worker-written counters are padded
-  onto separate cache lines to avoid **false sharing**, and a runtime
-  check verifies the atomics are truly lock-free on this platform.
+- Every counter that crosses threads or processes is a C++17
+  `std::atomic<uint64_t>`. Receiver-written and worker-written counters
+  are padded onto separate cache lines to avoid **false sharing**, and a
+  runtime check verifies the atomics are truly lock-free on this
+  platform.
 - Signal handling deliberately omits `SA_RESTART` so a blocking
   `recvfrom()` is interrupted (returns `EINTR`), letting the receiver
   observe `Ctrl-C` and shut down cleanly instead of spinning or hanging.
-- All sockets, threads, and shared-memory resources use the `CHECK()` +
-  `goto cleanup` pattern from `common.h`, so every exit path unwinds
-  cleanly.
+- All sockets, threads, and shared-memory resources are owned by RAII
+  wrappers (`Socket`, `SharedStatsRegion`, `std::thread`, `QueueMutex`)
+  from `common.hpp`/`shared_stats.hpp`. `CHECK()` throws a `SystemError`
+  on syscall failure; a top-level `catch` in `main()` reports it and
+  returns an exit code. Stack unwinding runs the destructors, so every
+  exit path cleans up - no `goto cleanup` needed.
 
 ## Prerequisites
 
@@ -71,7 +76,7 @@ sudo apt update && sudo apt install -y build-essential
 Verify:
 
 ```sh
-gcc --version   # 12+ recommended
+g++ --version   # 12+ recommended (C++17 support)
 make --version
 ```
 
@@ -205,7 +210,7 @@ make tsan   # ThreadSanitizer build (useful from Phase 3 on)
 
 - **Phase 3:** deadlock and data-race labs, ASan/TSan/Helgrind targets,
   debugging documentation.
-- **Phase 4:** C11-atomic lock-free SPSC ring, memory-ordering notes,
+- **Phase 4:** C++17-atomic lock-free SPSC ring, memory-ordering notes,
   queue comparison scripts.
 - **Phase 5:** Disruptor-style fan-out, epoll/eventfd/timerfd,
   CPU-affinity and `perf` exercises.
