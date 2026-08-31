@@ -25,7 +25,7 @@ namespace {
 constexpr int      kDefaultPort       = 9000;
 constexpr uint64_t kDefaultRate       = 100000;  /* average msgs/second   */
 constexpr uint64_t kDefaultCount      = 1000000; /* sequence numbers      */
-constexpr uint32_t kDefaultSymbol     = 1;
+constexpr uint32_t kDefaultSymbol     = 1;  
 constexpr uint64_t kDefaultDropEvery  = 0;       /* 0 == no artificial drops */
 constexpr uint64_t kDefaultBurst      = 1;
 

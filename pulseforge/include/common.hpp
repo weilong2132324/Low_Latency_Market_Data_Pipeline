@@ -43,9 +43,7 @@ enum ExitCode : int {
  */
 class SystemError : public std::runtime_error {
 public:
-    SystemError(const std::string &what, int error_number)
-        : std::runtime_error(what), error_number_(error_number) {}
-
+    SystemError(const std::string &what, int error_number) : std::runtime_error(what), error_number_(error_number) {}
     int code() const noexcept { return error_number_; }
 
 private:
@@ -64,7 +62,7 @@ private:
     do {                                                                   \
         if ((call) < 0) {                                                  \
             throw SystemError((what), errno);                              \
-        }                                                                  \
+        }                                      z                           \
     } while (0)
 
 /*
