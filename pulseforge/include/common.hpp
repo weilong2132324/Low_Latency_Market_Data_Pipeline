@@ -66,7 +66,7 @@ private:
     } while (0)
 
 /*
- * Socket - RAII wrapper around a POSIX file descriptor.
+ * Socket - RAII wrapper around a file descriptor.
  *
  * Ownership: the Socket owns the fd; closing happens in the destructor
  * (and on move-assignment). Movable but not copyable, so a Socket can
@@ -85,6 +85,7 @@ public:
     Socket &operator=(const Socket &) = delete;
 
     Socket(Socket &&other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
+    
     Socket &operator=(Socket &&other) noexcept {
         if (this != &other) {
             close();

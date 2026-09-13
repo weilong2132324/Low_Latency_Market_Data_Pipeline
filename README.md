@@ -10,9 +10,6 @@ only** - this is **not** production trading software.
 - **Build:** `g++` + `make` only, no external libraries
 - **Warnings are errors:** `-Wall -Wextra -Wpedantic -Werror`
 
-> Running on Windows? Use **WSL (Ubuntu)** - every API used here is
-> available inside WSL2.
-
 ## Architecture
 
 ![PulseForge architecture diagram](image/image.png)
