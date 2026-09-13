@@ -30,6 +30,7 @@ constexpr uint64_t kDefaultDropEvery  = 0;       /* 0 == no artificial drops */
 constexpr uint64_t kDefaultBurst      = 1;
 
 struct PublisherConfig {
+    // Struct that holds the configuration settings
     int      port      = kDefaultPort;
     uint64_t rate      = kDefaultRate;
     uint64_t count     = kDefaultCount;
@@ -112,6 +113,7 @@ int main(int argc, char **argv) {
         sockaddr_in dst{};
         dst.sin_family = AF_INET;
         dst.sin_port   = htons(static_cast<uint16_t>(cfg.port));
+        
         if (inet_pton(AF_INET, "127.0.0.1", &dst.sin_addr) != 1) {
             std::fprintf(stderr, "inet_pton failed for 127.0.0.1\n");
             return EXIT_CFG;
@@ -144,7 +146,9 @@ int main(int argc, char **argv) {
                 if (seq == cfg.count) {
                     msg.flags |= TICK_FLAG_LAST; /* mark the final message */
                 }
-
+                
+                // pause - 13/9/2026
+                
                 ssize_t n = sendto(sock.get(), &msg, sizeof(msg), 0,
                                    reinterpret_cast<const sockaddr *>(&dst),
                                    static_cast<socklen_t>(sizeof(dst)));
