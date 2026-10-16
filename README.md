@@ -10,6 +10,62 @@ only** - this is **not** production trading software.
 - **Build:** `g++` + `make` only, no external libraries
 - **Warnings are errors:** `-Wall -Wextra -Wpedantic -Werror`
 
+## Quick start (all commands)
+
+Everything here runs inside WSL2/Linux (`cd pulseforge` first). Each
+block is independent - run just the ones you want.
+
+**Build:**
+```sh
+make            # bin/publisher, receiver, monitor, deadlock_demo, race_demo, telemetry_bridge
+make test       # build + run all unit tests
+make bin/queue_bench
+make debug | make asan | make tsan   # alternate builds
+make clean
+```
+
+**Basic pipeline (3 terminals):**
+```sh
+./bin/receiver --port 9000 --queue mutex --workers 1
+./bin/monitor --shared-memory-name /pulseforge_stats
+./bin/publisher --port 9000 --rate 10000 --count 10000 --drop-every 7
+# or, one-shot: bash scripts/run_basic.sh
+```
+
+**Queue backend comparison bench:**
+```sh
+./bin/queue_bench --count 200000 --workers 2
+```
+
+**Multicast (one publisher, many receivers):**
+```sh
+./bin/receiver  --port 9200 --transport multicast --group 239.255.0.5 --shared-memory-name /pf_a &
+./bin/receiver  --port 9200 --transport multicast --group 239.255.0.5 --shared-memory-name /pf_b &
+./bin/publisher --port 9200 --transport multicast --group 239.255.0.5 --rate 5000 --count 5000
+```
+
+**TCP gap recovery:**
+```sh
+./bin/receiver  --snapshot-host 127.0.0.1 --snapshot-port 9501 --port 9500 --shared-memory-name /pf_r
+./bin/publisher --snapshot-port 9501 --port 9500 --rate 500 --count 500 --drop-every 23
+```
+
+**Telemetry + 3D visualizer:**
+```sh
+./bin/receiver --telemetry --port 9000
+./bin/telemetry_bridge
+./bin/publisher --port 9000 --rate 2000 --count 50000 --drop-every 17
+# then open pulseforge/visualizer/index.html in a browser
+```
+
+**Debugging labs:**
+```sh
+./bin/deadlock_demo
+./bin/race_demo
+make tsan && ./bin/race_demo       # catch the race with ThreadSanitizer
+make helgrind                       # prints the valgrind invocation
+```
+
 ## Architecture
 
 ![PulseForge architecture diagram](image/image.png)

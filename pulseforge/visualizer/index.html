@@ -35,6 +35,8 @@
   #topbar button:hover { border-color: var(--hot); }
   #status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); flex: none; }
   #status-dot.connected { background: var(--ok); }
+  #debug-line { position: fixed; top: 44px; left: 10px; right: 10px; font-size: 11px;
+    color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #legend { bottom: 10px; left: 10px; }
   #legend .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:middle; }
   #stats { top: 56px; left: 10px; width: 230px; }
@@ -69,11 +71,13 @@
   <button id="connect-btn">Connect</button>
   <span style="color:var(--muted)">PulseForge Visualizer - click a component to inspect it</span>
 </div>
+<div id="debug-line">waiting for connection...</div>
 
 <div id="legend" class="panel">
-  <div><span class="swatch" style="background:var(--hot)"></span>hot path (receive &rarr; queue &rarr; workers)</div>
-  <div><span class="swatch" style="background:var(--cold)"></span>cold path (telemetry / recovery)</div>
-  <div><span class="swatch" style="background:#999"></span>publisher / network</div>
+  <div style="margin-bottom:4px; color:var(--text)">3 machines, 1 lab box (loopback stands in for a real network):</div>
+  <div><span class="swatch" style="background:#9aa3b2"></span>Machine A - Exchange Gateway</div>
+  <div><span class="swatch" style="background:var(--hot)"></span>Machine B - Trading Receiver (hot path)</div>
+  <div><span class="swatch" style="background:var(--cold)"></span>Machine C - Monitoring Host (cold path)</div>
 </div>
 
 <div id="stats" class="panel">
@@ -121,47 +125,58 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
 
-/* ---------- node descriptions (shown in the click-to-inspect panel) ---------- */
+/*
+ * ---------- node descriptions (shown in the click-to-inspect panel) ----------
+ * Grouped into three MACHINES - the mental model this scene is built
+ * around: in a real HFT shop these would be three distinct physical
+ * hosts, connected by real network links (multicast feed, a TCP
+ * recovery channel, a metrics/telemetry hop). This lab runs all three
+ * as separate OS processes talking over 127.0.0.1 - same protocols,
+ * same process boundaries, just one box standing in for three. Nothing
+ * stops you from actually running publisher/receiver/telemetry_bridge
+ * on three different machines on a LAN and pointing --group/--port/
+ * --snapshot-host/ws-url at real IPs instead of 127.0.0.1.
+ */
 const NODE_INFO = {
   publisher: {
-    title: 'Publisher',
-    desc: 'Synthesizes TickMessages and sends them over UDP (or UDP multicast). Also runs the optional TCP snapshot/recovery server.',
+    title: 'Publisher  —  Machine A: Exchange Gateway',
+    desc: 'Synthesizes TickMessages and sends them over UDP (or UDP multicast) to Machine B. Also runs the optional TCP snapshot/recovery server that Machine B calls back into when it detects a gap.',
     src: 'src/publisher.cpp',
     statKeys: [],
   },
   network: {
-    title: 'Network (UDP)',
-    desc: 'The wire between publisher and receiver. Lossy by design - --drop-every simulates loss; multicast lets one send reach many receivers.',
+    title: 'Network hop: A → B (UDP)',
+    desc: 'The wire between the gateway and the receiver host. Lossy by design - --drop-every simulates loss; multicast lets one send reach many receiver machines at once.',
     src: 'include/multicast.hpp',
     statKeys: ['gaps', 'invalid'],
   },
   receiver: {
-    title: 'Receiver (hot path)',
+    title: 'Receiver  —  Machine B: Trading Receiver (hot path)',
     desc: 'Binds the UDP socket, validates datagrams, detects sequence gaps/reorders, and enqueues ticks with backpressure. --batch uses recvmmsg(); --busy-poll sets SO_BUSY_POLL; --bpf-filter attaches a classic-BPF kernel filter.',
     src: 'src/receiver.cpp',
     statKeys: ['received', 'invalid', 'gaps', 'queue_full'],
   },
   queue: {
-    title: 'Queue backend (hot path)',
+    title: 'Queue backend  —  Machine B (hot path)',
     desc: 'One of three interchangeable backends behind a factory: mutex+condvar (work-sharing), lock-free SPSC ring (work-sharing, single consumer), or a Disruptor-style broadcast ring (every worker sees every message).',
     src: 'include/queue_backend.hpp',
     statKeys: ['queue_depth', 'queue_full'],
   },
   workers: {
-    title: 'Worker pool (hot path)',
+    title: 'Worker pool  —  Machine B (hot path)',
     desc: 'N consumer threads folding each tick into shared statistics (processed count, latency histogram). Atomic counters, relaxed ordering - see docs/memory_ordering.md.',
     src: 'src/worker.cpp',
     statKeys: ['processed', 'avg', 'max'],
   },
   recovery: {
-    title: 'TCP gap recovery (cold path)',
-    desc: 'On a detected gap, the receiver issues an async (std::async/std::future) TCP request to the publisher\'s snapshot server. Capped in-flight requests avoid a thundering-herd of recovery threads under heavy loss.',
+    title: 'TCP recovery link: B → A',
+    desc: 'On a detected gap, Machine B issues an async (std::async/std::future) TCP request back to Machine A\'s snapshot server. Capped in-flight requests avoid a thundering-herd of recovery threads under heavy loss. This is the "UDP for speed, TCP for reliability" link.',
     src: 'include/snapshot_protocol.hpp',
     statKeys: ['recovered'],
   },
   telemetry: {
-    title: 'Telemetry bridge (cold path)',
-    desc: 'A guest process (like monitor) that reads the shared-memory stats + event ring and streams JSON to this page over a hand-rolled WebSocket server - no third-party WS/JSON library.',
+    title: 'Telemetry bridge  —  Machine C: Monitoring Host (cold path)',
+    desc: 'Reads Machine B\'s shared-memory stats + event ring (same-host only - shared memory does not cross real machines) and streams JSON to this browser over a hand-rolled WebSocket server - no third-party WS/JSON library. The WebSocket hop to you IS a real network boundary.',
     src: 'src/telemetry_bridge.cpp',
     statKeys: [],
   },
@@ -171,10 +186,10 @@ const NODE_INFO = {
 const container = document.getElementById('scene');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0e14);
-scene.fog = new THREE.Fog(0x0b0e14, 20, 60);
+scene.fog = new THREE.Fog(0x0b0e14, 30, 85);
 
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
-camera.position.set(0, 7, 16);
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 300);
+camera.position.set(0, 13, 32);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
@@ -190,36 +205,69 @@ const dir = new THREE.DirectionalLight(0xffffff, 0.8);
 dir.position.set(5, 10, 5);
 scene.add(dir);
 
-const floorGeo = new THREE.PlaneGeometry(60, 60);
+const floorGeo = new THREE.PlaneGeometry(100, 50);
 const floorMat = new THREE.MeshStandardMaterial({ color: 0x11151f, roughness: 1 });
 const floor = new THREE.Mesh(floorGeo, floorMat);
 floor.rotation.x = -Math.PI / 2;
 floor.position.y = -0.01;
 scene.add(floor);
-const grid = new THREE.GridHelper(60, 60, 0x1b2130, 0x161b26);
+const grid = new THREE.GridHelper(100, 50, 0x1b2130, 0x161b26);
 scene.add(grid);
 
 const HOT = 0xff6b4a, COLD = 0x4ab3ff, NEUTRAL = 0x9aa3b2;
 
-function makeLabel(text, x, y, z) {
+/* ---------- machine platforms ---------- */
+/* Each "machine" is a raised, tinted plate - a stand-in for a separate
+ * physical host. Components sit on top of their machine's plate; the
+ * gaps BETWEEN plates are where the real network hops (UDP, TCP,
+ * WebSocket) are drawn, so "packet crosses a gap" visually means
+ * "packet crosses a machine boundary". */
+function addMachinePlatform(centerX, width, depth, tint, label) {
+  const geo = new THREE.BoxGeometry(width, 0.25, depth);
+  const mat = new THREE.MeshStandardMaterial({ color: tint, transparent: true, opacity: 0.22, roughness: 1 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(centerX, -0.1, 0);
+  scene.add(mesh);
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geo),
+    new THREE.LineBasicMaterial({ color: tint, transparent: true, opacity: 0.6 })
+  );
+  edges.position.copy(mesh.position);
+  scene.add(edges);
+  makeLabel(label, centerX, 4.4, 0, 5.5, 0.9, 30);
+}
+
+function makeLabel(text, x, y, z, scaleX = 3, scaleY = 0.75, fontPx = 28) {
   const canvas = document.createElement('canvas');
-  canvas.width = 256; canvas.height = 64;
+  canvas.width = 512; canvas.height = 128;
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#d8dee9';
-  ctx.font = '28px monospace';
+  ctx.font = `${fontPx * 2}px monospace`;
   ctx.textAlign = 'center';
-  ctx.fillText(text, 128, 42);
+  ctx.fillText(text, 256, 80);
   const tex = new THREE.CanvasTexture(canvas);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
   const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(3, 0.75, 1);
+  sprite.scale.set(scaleX, scaleY, 1);
   sprite.position.set(x, y, z);
   scene.add(sprite);
   return sprite;
 }
 
-/* X positions along the main pipeline */
-const X = { publisher: -12, network: -8, receiver: -4, queue: 0, workers: 5, telemetry: 9 };
+/*
+ * X positions: three machine "zones" with gaps between them where the
+ * network hops live. Machine A: publisher. Gap A-B: the UDP wire.
+ * Machine B: receiver/queue/workers. Gap B-C: the telemetry/WS hop.
+ * Machine C: telemetry bridge. The TCP recovery link runs B -> A on a
+ * separate Z offset so it doesn't overlap the main UDP line.
+ */
+const X = { publisher: -17, network: -9.5, receiver: -4.5, queue: 0, workers: 4.5, telemetry: 16 };
+const RECOVERY_Z = 3.2;
+const RECOVERY_MID = { x: (X.publisher + X.receiver) / 2, y: 0.6, z: RECOVERY_Z };
+
+addMachinePlatform(X.publisher, 10, 7, NEUTRAL, 'MACHINE A — EXCHANGE GATEWAY');
+addMachinePlatform(0, 14, 7, HOT, 'MACHINE B — TRADING RECEIVER (hot path)');
+addMachinePlatform(X.telemetry, 8, 7, COLD, 'MACHINE C — MONITORING HOST (cold path)');
 
 function addBoxNode(key, x, y, z, color, size = [1.6, 1.6, 1.6]) {
   const geo = new THREE.BoxGeometry(...size);
@@ -282,11 +330,12 @@ makeLabel('workers', X.workers, 2.3, 0);
 nodes.telemetry = addBoxNode('telemetry', X.telemetry, 1, 0, COLD, [1.4, 1.4, 1.4]);
 makeLabel('telemetry bridge', X.telemetry, 2.3, 0);
 
-/* recovery: a node BELOW the main line, linked to publisher + receiver */
-nodes.recovery = addBoxNode('recovery', (X.publisher + X.receiver) / 2, -1.6, 2.5, COLD, [1.1, 1.1, 1.1]);
-makeLabel('TCP recovery', (X.publisher + X.receiver) / 2, -0.4, 2.5);
+/* recovery: a small inspectable marker on the B -> A TCP cable, offset
+ * in Z so it visually runs alongside (not on top of) the UDP line. */
+nodes.recovery = addBoxNode('recovery', RECOVERY_MID.x, RECOVERY_MID.y, RECOVERY_MID.z, COLD, [0.8, 0.8, 0.8]);
+makeLabel('TCP recovery link', RECOVERY_MID.x, RECOVERY_MID.y + 1.1, RECOVERY_MID.z);
 
-/* connecting lines (main path + recovery path) */
+/* connecting lines: thick/bright = inter-machine network hop, thin = intra-machine wiring */
 function addLine(a, b, color = 0x2a3346, dashed = false) {
   const points = [new THREE.Vector3(...a), new THREE.Vector3(...b)];
   const geo = new THREE.BufferGeometry().setFromPoints(points);
@@ -297,13 +346,15 @@ function addLine(a, b, color = 0x2a3346, dashed = false) {
   if (dashed) line.computeLineDistances();
   scene.add(line);
 }
-addLine([X.publisher, 1, 0], [X.network, 1.4, 0]);
-addLine([X.network, 1.4, 0], [X.receiver, 1, 0]);
+/* intra-machine (inside Machine B) */
 addLine([X.receiver, 1, 0], [X.queue, 0.3, 0]);
 addLine([X.queue, 0.3, 0], [X.workers, 1, 0]);
+/* inter-machine network hops (A -> B UDP, B -> A TCP, B -> C telemetry) */
+addLine([X.publisher, 1, 0], [X.network, 1.4, 0], 0x4a5568);
+addLine([X.network, 1.4, 0], [X.receiver, 1, 0], 0x4a5568);
 addLine([X.workers, 1, 0], [X.telemetry, 1, 0], 0x274a63);
-addLine([X.publisher, 1, 0], [(X.publisher + X.receiver) / 2, -1.6, 2.5], 0x274a63, true);
-addLine([(X.publisher + X.receiver) / 2, -1.6, 2.5], [X.receiver, 1, 0], 0x274a63, true);
+addLine([X.publisher, 1, 0], [RECOVERY_MID.x, RECOVERY_MID.y, RECOVERY_MID.z], 0x274a63, true);
+addLine([RECOVERY_MID.x, RECOVERY_MID.y, RECOVERY_MID.z], [X.receiver, 1, 0], 0x274a63, true);
 
 /* ---------- click-to-inspect ---------- */
 const raycaster = new THREE.Raycaster();
@@ -376,7 +427,7 @@ function pathFor(eventType) {
     return [p(X.network, 1.4, 0), p(X.receiver, 1, 0)];
   }
   if (eventType === 'recovered') {
-    const mid = p((X.publisher + X.receiver) / 2, -1.6, 2.5);
+    const mid = p(RECOVERY_MID.x, RECOVERY_MID.y, RECOVERY_MID.z);
     return [p(X.publisher, 1, 0), mid, p(X.receiver, 1, 0)];
   }
   if (eventType === 'invalid' || eventType === 'queue_full') {
@@ -429,16 +480,35 @@ function setStatus(connected, text) {
   document.getElementById('status-text').textContent = text;
 }
 
+let framesReceived = 0;
+function logDebug(text) {
+  const t = new Date().toLocaleTimeString();
+  document.getElementById('debug-line').textContent = `[${t}] ${text}`;
+  console.log('[PulseForge]', text);
+}
+
 function connect(url) {
   if (ws) { try { ws.close(); } catch (e) {} }
   setStatus(false, 'connecting...');
-  ws = new WebSocket(url);
-  ws.onopen = () => setStatus(true, 'connected');
-  ws.onclose = () => setStatus(false, 'disconnected');
-  ws.onerror = () => setStatus(false, 'error (see console)');
+  logDebug(`connecting to ${url} ...`);
+  framesReceived = 0;
+  try {
+    ws = new WebSocket(url);
+  } catch (e) {
+    setStatus(false, 'invalid URL');
+    logDebug(`new WebSocket(${url}) threw: ${e.message}`);
+    return;
+  }
+  ws.onopen = () => { setStatus(true, 'connected'); logDebug(`connected to ${url} - waiting for first frame`); };
+  ws.onclose = (ev) => { setStatus(false, 'disconnected'); logDebug(`closed (code ${ev.code}). Is telemetry_bridge still running?`); };
+  ws.onerror = () => { setStatus(false, 'error'); logDebug(`WebSocket error - is telemetry_bridge running and reachable at ${url}?`); };
   ws.onmessage = (ev) => {
+    framesReceived++;
     let msg;
-    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    try { msg = JSON.parse(ev.data); } catch (e) { logDebug(`frame ${framesReceived}: JSON parse failed`); return; }
+    const nEvents = Array.isArray(msg.events) ? msg.events.length : 0;
+    logDebug(`frame ${framesReceived}: processed=${msg.stats ? msg.stats.processed : '?'}  new events=${nEvents}` +
+             (nEvents === 0 && framesReceived <= 2 ? '  (no events yet - start the publisher, or it already finished before you connected)' : ''));
     if (msg.stats) applyStats(msg.stats);
     if (Array.isArray(msg.events)) applyEvents(msg.events);
   };

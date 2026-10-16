@@ -202,8 +202,21 @@ int main(int argc, char **argv) {
 
         uint64_t last_seen = 0;
         while (!g_stop.load(std::memory_order_relaxed)) {
-            std::string json = build_snapshot_json(*stats, *events, last_seen);
-            ws.broadcast_text(json);
+            /*
+             * Only advance last_seen (consume the event ring) when a
+             * client is actually connected. Without this check, events
+             * get drained into a broadcast nobody receives every tick
+             * regardless of whether anyone is listening - so opening
+             * the visualizer even a few seconds late means "last_seen"
+             * has already caught up to "current" and every event looks
+             * gone. Leaving last_seen frozen while idle means the first
+             * client to connect gets a backlog (bounded by the ring's
+             * capacity) instead of silence.
+             */
+            if (ws.client_count() > 0) {
+                std::string json = build_snapshot_json(*stats, *events, last_seen);
+                ws.broadcast_text(json);
+            }
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(cfg.interval_ms));
         }
