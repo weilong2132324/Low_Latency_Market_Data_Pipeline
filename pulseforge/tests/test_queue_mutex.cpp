@@ -117,6 +117,7 @@ static void test_shared_stats_init() {
     CHECK(s.sequence_gaps.load() == 0);
     CHECK(s.reorders.load() == 0);
     CHECK(s.queue_full.load() == 0);
+    CHECK(s.recovered.load() == 0);
     CHECK(s.processed.load() == 0);
     CHECK(s.queue_depth.load() == 0);
     CHECK(s.latency_total_ns.load() == 0);

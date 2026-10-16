@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PulseForge Visualizer</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #11151f;
+    --panel-border: #232a3a;
+    --text: #d8dee9;
+    --muted: #7c8595;
+    --hot: #ff6b4a;
+    --hot-dim: #7a3626;
+    --cold: #4ab3ff;
+    --cold-dim: #26496b;
+    --ok: #4ade80;
+    --warn: #facc15;
+    --bad: #f87171;
+  }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: ui-monospace, "SF Mono", Consolas, monospace; overflow: hidden; }
+  #scene { position: fixed; inset: 0; }
+  .panel {
+    position: fixed; background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: 8px; padding: 10px 14px; font-size: 12px; line-height: 1.5;
+    box-shadow: 0 4px 24px rgba(0,0,0,.4);
+  }
+  #topbar { top: 10px; left: 10px; right: 10px; display: flex; gap: 10px; align-items: center; }
+  #topbar input[type=text] { background: #0b0e14; border: 1px solid var(--panel-border);
+    color: var(--text); padding: 4px 8px; border-radius: 4px; width: 220px; font-size: 12px; }
+  #topbar button { background: #1b2130; border: 1px solid var(--panel-border); color: var(--text);
+    padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  #topbar button:hover { border-color: var(--hot); }
+  #status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); flex: none; }
+  #status-dot.connected { background: var(--ok); }
+  #legend { bottom: 10px; left: 10px; }
+  #legend .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:middle; }
+  #stats { top: 56px; left: 10px; width: 230px; }
+  #stats table { width: 100%; border-collapse: collapse; }
+  #stats td { padding: 1px 0; }
+  #stats td.v { text-align: right; color: #fff; font-weight: 600; }
+  #info { top: 56px; right: 10px; width: 300px; display: none; }
+  #info h3 { margin: 0 0 6px 0; font-size: 13px; color: var(--hot); }
+  #info .desc { color: var(--muted); margin-bottom: 8px; }
+  #info .src { color: var(--cold); font-size: 11px; }
+  #controls { bottom: 10px; right: 10px; width: 260px; }
+  #controls label { display: block; margin-bottom: 6px; color: var(--muted); }
+  #controls input[type=range] { width: 100%; }
+  #bench { bottom: 10px; left: 260px; width: 320px; max-height: 220px; overflow: auto; }
+  #bench textarea { width: 100%; height: 70px; background: #0b0e14; color: var(--text);
+    border: 1px solid var(--panel-border); border-radius: 4px; font-size: 11px; resize: vertical; }
+  #bench button { margin-top: 6px; }
+  .bar-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; }
+  .bar-row .label { width: 60px; color: var(--muted); }
+  .bar-track { flex: 1; height: 10px; background: #1b2130; border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; background: linear-gradient(90deg, var(--cold), var(--hot)); }
+  .bar-val { width: 70px; text-align: right; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+
+<div id="topbar" class="panel">
+  <span id="status-dot"></span>
+  <span id="status-text">disconnected</span>
+  <input id="ws-url" type="text" value="ws://127.0.0.1:9700" />
+  <button id="connect-btn">Connect</button>
+  <span style="color:var(--muted)">PulseForge Visualizer - click a component to inspect it</span>
+</div>
+
+<div id="legend" class="panel">
+  <div><span class="swatch" style="background:var(--hot)"></span>hot path (receive &rarr; queue &rarr; workers)</div>
+  <div><span class="swatch" style="background:var(--cold)"></span>cold path (telemetry / recovery)</div>
+  <div><span class="swatch" style="background:#999"></span>publisher / network</div>
+</div>
+
+<div id="stats" class="panel">
+  <table>
+    <tr><td>received</td><td class="v" id="s-received">0</td></tr>
+    <tr><td>invalid</td><td class="v" id="s-invalid">0</td></tr>
+    <tr><td>gaps</td><td class="v" id="s-gaps">0</td></tr>
+    <tr><td>recovered</td><td class="v" id="s-recovered">0</td></tr>
+    <tr><td>queue full</td><td class="v" id="s-queue_full">0</td></tr>
+    <tr><td>queue depth</td><td class="v" id="s-queue_depth">0</td></tr>
+    <tr><td>processed</td><td class="v" id="s-processed">0</td></tr>
+    <tr><td>avg latency</td><td class="v" id="s-avg">0 us</td></tr>
+    <tr><td>max latency</td><td class="v" id="s-max">0 us</td></tr>
+  </table>
+</div>
+
+<div id="info" class="panel">
+  <h3 id="info-title"></h3>
+  <div class="desc" id="info-desc"></div>
+  <table id="info-stats"></table>
+  <div class="src" id="info-src"></div>
+</div>
+
+<div id="controls" class="panel">
+  <label>Time dilation: <span id="dilation-val">400</span> ms per packet
+    <input id="dilation" type="range" min="80" max="1500" value="400" />
+  </label>
+  <label>Packet spawn rate cap: <span id="rate-val">40</span>/s
+    <input id="rate-cap" type="range" min="5" max="120" value="40" />
+  </label>
+</div>
+
+<div id="bench" class="panel">
+  <div style="color:var(--muted); margin-bottom:4px;">Latency-reduction view - paste real
+    <code>./bin/queue_bench</code> output below:</div>
+  <textarea id="bench-input" placeholder="queue_bench: count=... workers=...
+  mutex       count=...  p50=...ns  p99=...ns  p99.9=...ns  max=...ns
+  spsc        count=...  p50=...ns  ...
+  disruptor   count=...  p50=...ns  ..."></textarea>
+  <button id="bench-parse">Render bars</button>
+  <div id="bench-bars"></div>
+</div>
+
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+
+/* ---------- node descriptions (shown in the click-to-inspect panel) ---------- */
+const NODE_INFO = {
+  publisher: {
+    title: 'Publisher',
+    desc: 'Synthesizes TickMessages and sends them over UDP (or UDP multicast). Also runs the optional TCP snapshot/recovery server.',
+    src: 'src/publisher.cpp',
+    statKeys: [],
+  },
+  network: {
+    title: 'Network (UDP)',
+    desc: 'The wire between publisher and receiver. Lossy by design - --drop-every simulates loss; multicast lets one send reach many receivers.',
+    src: 'include/multicast.hpp',
+    statKeys: ['gaps', 'invalid'],
+  },
+  receiver: {
+    title: 'Receiver (hot path)',
+    desc: 'Binds the UDP socket, validates datagrams, detects sequence gaps/reorders, and enqueues ticks with backpressure. --batch uses recvmmsg(); --busy-poll sets SO_BUSY_POLL; --bpf-filter attaches a classic-BPF kernel filter.',
+    src: 'src/receiver.cpp',
+    statKeys: ['received', 'invalid', 'gaps', 'queue_full'],
+  },
+  queue: {
+    title: 'Queue backend (hot path)',
+    desc: 'One of three interchangeable backends behind a factory: mutex+condvar (work-sharing), lock-free SPSC ring (work-sharing, single consumer), or a Disruptor-style broadcast ring (every worker sees every message).',
+    src: 'include/queue_backend.hpp',
+    statKeys: ['queue_depth', 'queue_full'],
+  },
+  workers: {
+    title: 'Worker pool (hot path)',
+    desc: 'N consumer threads folding each tick into shared statistics (processed count, latency histogram). Atomic counters, relaxed ordering - see docs/memory_ordering.md.',
+    src: 'src/worker.cpp',
+    statKeys: ['processed', 'avg', 'max'],
+  },
+  recovery: {
+    title: 'TCP gap recovery (cold path)',
+    desc: 'On a detected gap, the receiver issues an async (std::async/std::future) TCP request to the publisher\'s snapshot server. Capped in-flight requests avoid a thundering-herd of recovery threads under heavy loss.',
+    src: 'include/snapshot_protocol.hpp',
+    statKeys: ['recovered'],
+  },
+  telemetry: {
+    title: 'Telemetry bridge (cold path)',
+    desc: 'A guest process (like monitor) that reads the shared-memory stats + event ring and streams JSON to this page over a hand-rolled WebSocket server - no third-party WS/JSON library.',
+    src: 'src/telemetry_bridge.cpp',
+    statKeys: [],
+  },
+};
+
+/* ---------- scene setup ---------- */
+const container = document.getElementById('scene');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0e14);
+scene.fog = new THREE.Fog(0x0b0e14, 20, 60);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
+camera.position.set(0, 7, 16);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+container.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1, 0);
+controls.enableDamping = true;
+
+scene.add(new THREE.AmbientLight(0x404060, 1.2));
+const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+dir.position.set(5, 10, 5);
+scene.add(dir);
+
+const floorGeo = new THREE.PlaneGeometry(60, 60);
+const floorMat = new THREE.MeshStandardMaterial({ color: 0x11151f, roughness: 1 });
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.rotation.x = -Math.PI / 2;
+floor.position.y = -0.01;
+scene.add(floor);
+const grid = new THREE.GridHelper(60, 60, 0x1b2130, 0x161b26);
+scene.add(grid);
+
+const HOT = 0xff6b4a, COLD = 0x4ab3ff, NEUTRAL = 0x9aa3b2;
+
+function makeLabel(text, x, y, z) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#d8dee9';
+  ctx.font = '28px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, 128, 42);
+  const tex = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(3, 0.75, 1);
+  sprite.position.set(x, y, z);
+  scene.add(sprite);
+  return sprite;
+}
+
+/* X positions along the main pipeline */
+const X = { publisher: -12, network: -8, receiver: -4, queue: 0, workers: 5, telemetry: 9 };
+
+function addBoxNode(key, x, y, z, color, size = [1.6, 1.6, 1.6]) {
+  const geo = new THREE.BoxGeometry(...size);
+  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25, roughness: 0.4 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x, y, z);
+  mesh.userData.nodeKey = key;
+  scene.add(mesh);
+  return mesh;
+}
+
+const nodes = {};
+nodes.publisher = addBoxNode('publisher', X.publisher, 1, 0, NEUTRAL);
+makeLabel('publisher', X.publisher, 2.3, 0);
+
+/* network: a translucent torus "cloud" */
+{
+  const geo = new THREE.TorusKnotGeometry(1.1, 0.25, 80, 12);
+  const mat = new THREE.MeshStandardMaterial({ color: NEUTRAL, transparent: true, opacity: 0.55, roughness: 0.6 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(X.network, 1.4, 0);
+  mesh.userData.nodeKey = 'network';
+  scene.add(mesh);
+  nodes.network = mesh;
+  makeLabel('network (UDP)', X.network, 2.9, 0);
+}
+
+nodes.receiver = addBoxNode('receiver', X.receiver, 1, 0, HOT);
+makeLabel('receiver', X.receiver, 2.3, 0);
+
+/* queue: a row of small slot boxes whose fill color/height reflects depth */
+const QUEUE_SLOTS = 12;
+const queueSlotMeshes = [];
+for (let i = 0; i < QUEUE_SLOTS; i++) {
+  const geo = new THREE.BoxGeometry(0.35, 0.35, 0.35);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x3a2e28, emissive: 0x000000 });
+  const mesh = new THREE.Mesh(geo, mat);
+  const spread = (i - (QUEUE_SLOTS - 1) / 2) * 0.45;
+  mesh.position.set(X.queue, 0.3, spread);
+  mesh.userData.nodeKey = 'queue';
+  scene.add(mesh);
+  queueSlotMeshes.push(mesh);
+}
+makeLabel('queue', X.queue, 2.3, 0);
+
+nodes.workers = addBoxNode('workers', X.workers, 1, 0, HOT, [1.2, 1.2, 1.2]);
+const WORKER_COUNT = 3;
+const workerSpheres = [];
+for (let i = 0; i < WORKER_COUNT; i++) {
+  const geo = new THREE.SphereGeometry(0.35, 16, 16);
+  const mat = new THREE.MeshStandardMaterial({ color: HOT, emissive: HOT, emissiveIntensity: 0.3 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(X.workers, 1, (i - (WORKER_COUNT - 1) / 2) * 1.0);
+  mesh.userData.nodeKey = 'workers';
+  scene.add(mesh);
+  workerSpheres.push(mesh);
+}
+makeLabel('workers', X.workers, 2.3, 0);
+
+nodes.telemetry = addBoxNode('telemetry', X.telemetry, 1, 0, COLD, [1.4, 1.4, 1.4]);
+makeLabel('telemetry bridge', X.telemetry, 2.3, 0);
+
+/* recovery: a node BELOW the main line, linked to publisher + receiver */
+nodes.recovery = addBoxNode('recovery', (X.publisher + X.receiver) / 2, -1.6, 2.5, COLD, [1.1, 1.1, 1.1]);
+makeLabel('TCP recovery', (X.publisher + X.receiver) / 2, -0.4, 2.5);
+
+/* connecting lines (main path + recovery path) */
+function addLine(a, b, color = 0x2a3346, dashed = false) {
+  const points = [new THREE.Vector3(...a), new THREE.Vector3(...b)];
+  const geo = new THREE.BufferGeometry().setFromPoints(points);
+  const mat = dashed
+    ? new THREE.LineDashedMaterial({ color, dashSize: 0.3, gapSize: 0.2 })
+    : new THREE.LineBasicMaterial({ color });
+  const line = new THREE.Line(geo, mat);
+  if (dashed) line.computeLineDistances();
+  scene.add(line);
+}
+addLine([X.publisher, 1, 0], [X.network, 1.4, 0]);
+addLine([X.network, 1.4, 0], [X.receiver, 1, 0]);
+addLine([X.receiver, 1, 0], [X.queue, 0.3, 0]);
+addLine([X.queue, 0.3, 0], [X.workers, 1, 0]);
+addLine([X.workers, 1, 0], [X.telemetry, 1, 0], 0x274a63);
+addLine([X.publisher, 1, 0], [(X.publisher + X.receiver) / 2, -1.6, 2.5], 0x274a63, true);
+addLine([(X.publisher + X.receiver) / 2, -1.6, 2.5], [X.receiver, 1, 0], 0x274a63, true);
+
+/* ---------- click-to-inspect ---------- */
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let lastStats = {};
+
+function showInfo(key) {
+  const info = NODE_INFO[key];
+  if (!info) return;
+  document.getElementById('info').style.display = 'block';
+  document.getElementById('info-title').textContent = info.title;
+  document.getElementById('info-desc').textContent = info.desc;
+  document.getElementById('info-src').textContent = info.src;
+  const statsEl = document.getElementById('info-stats');
+  statsEl.innerHTML = '';
+  for (const k of info.statKeys) {
+    const row = document.createElement('tr');
+    const label = document.createElement('td');
+    label.textContent = k;
+    label.style.color = 'var(--muted)';
+    const val = document.createElement('td');
+    val.style.textAlign = 'right';
+    val.style.color = '#fff';
+    val.textContent = (lastStats[k] !== undefined) ? lastStats[k] : '-';
+    row.appendChild(label); row.appendChild(val);
+    statsEl.appendChild(row);
+  }
+}
+
+renderer.domElement.addEventListener('click', (ev) => {
+  pointer.x = (ev.clientX / window.innerWidth) * 2 - 1;
+  pointer.y = -(ev.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(scene.children, false);
+  for (const hit of hits) {
+    const key = hit.object.userData && hit.object.userData.nodeKey;
+    if (key) { showInfo(key); return; }
+  }
+});
+
+/* ---------- packet animation ---------- */
+const packets = []; // {mesh, path: [Vector3...], t0, duration, color}
+
+function packetColor(type) {
+  if (type === 'gap') return 0xf87171;
+  if (type === 'recovered') return 0x4ab3ff;
+  if (type === 'invalid') return 0x9aa3b2;
+  if (type === 'queue_full') return 0xfacc15;
+  return 0xffffff;
+}
+
+function spawnPacket(path, color, duration) {
+  const geo = new THREE.SphereGeometry(0.14, 12, 12);
+  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.9 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(path[0]);
+  scene.add(mesh);
+  packets.push({ mesh, path, t0: performance.now(), duration });
+}
+
+function pathFor(eventType) {
+  const p = (x, y, z) => new THREE.Vector3(x, y, z);
+  if (eventType === 'received') {
+    return [p(X.publisher, 1, 0), p(X.network, 1.4, 0), p(X.receiver, 1, 0), p(X.queue, 0.3, 0)];
+  }
+  if (eventType === 'processed') {
+    return [p(X.queue, 0.3, 0), p(X.workers, 1, 0), p(X.telemetry, 1, 0)];
+  }
+  if (eventType === 'gap') {
+    return [p(X.network, 1.4, 0), p(X.receiver, 1, 0)];
+  }
+  if (eventType === 'recovered') {
+    const mid = p((X.publisher + X.receiver) / 2, -1.6, 2.5);
+    return [p(X.publisher, 1, 0), mid, p(X.receiver, 1, 0)];
+  }
+  if (eventType === 'invalid' || eventType === 'queue_full') {
+    return [p(X.receiver, 1, 0), p(X.receiver, 1.8, 0.6)];
+  }
+  return [p(X.publisher, 1, 0), p(X.receiver, 1, 0)];
+}
+
+function updatePackets(now) {
+  for (let i = packets.length - 1; i >= 0; i--) {
+    const pk = packets[i];
+    const t = Math.min(1, (now - pk.t0) / pk.duration);
+    const path = pk.path;
+    const segCount = path.length - 1;
+    const segT = t * segCount;
+    const seg = Math.min(segCount - 1, Math.floor(segT));
+    const localT = segT - seg;
+    pk.mesh.position.lerpVectors(path[seg], path[seg + 1], localT);
+    if (t >= 1) {
+      scene.remove(pk.mesh);
+      pk.mesh.geometry.dispose();
+      pk.mesh.material.dispose();
+      packets.splice(i, 1);
+    }
+  }
+}
+
+/* ---------- queue depth + worker activity visuals ---------- */
+function updateQueueVisual(depth) {
+  const filled = Math.min(QUEUE_SLOTS, Math.round((depth / 64) * QUEUE_SLOTS));
+  queueSlotMeshes.forEach((mesh, i) => {
+    const on = i < filled;
+    mesh.material.color.set(on ? 0xff6b4a : 0x3a2e28);
+    mesh.material.emissive.set(on ? 0xff6b4a : 0x000000);
+    mesh.material.emissiveIntensity = on ? 0.6 : 0;
+  });
+}
+
+function pulseWorker(workerId) {
+  const mesh = workerSpheres[workerId % workerSpheres.length];
+  mesh.scale.setScalar(1.6);
+}
+
+/* ---------- WebSocket wiring ---------- */
+let ws = null;
+let lastSpawnTime = 0;
+
+function setStatus(connected, text) {
+  document.getElementById('status-dot').classList.toggle('connected', connected);
+  document.getElementById('status-text').textContent = text;
+}
+
+function connect(url) {
+  if (ws) { try { ws.close(); } catch (e) {} }
+  setStatus(false, 'connecting...');
+  ws = new WebSocket(url);
+  ws.onopen = () => setStatus(true, 'connected');
+  ws.onclose = () => setStatus(false, 'disconnected');
+  ws.onerror = () => setStatus(false, 'error (see console)');
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (msg.stats) applyStats(msg.stats);
+    if (Array.isArray(msg.events)) applyEvents(msg.events);
+  };
+}
+
+function applyStats(stats) {
+  lastStats = {
+    received: stats.received, invalid: stats.invalid, gaps: stats.gaps,
+    recovered: stats.recovered, queue_full: stats.queue_full,
+    queue_depth: stats.queue_depth, processed: stats.processed,
+    avg: ((stats.avg_latency_ns || 0) / 1000).toFixed(1) + ' us',
+    max: ((stats.max_latency_ns || 0) / 1000).toFixed(1) + ' us',
+  };
+  for (const [k, v] of Object.entries(stats)) {
+    if (k === 'avg_latency_ns' || k === 'max_latency_ns') continue; /* rendered below as us */
+    const el = document.getElementById('s-' + k);
+    if (el) el.textContent = v;
+  }
+  document.getElementById('s-avg').textContent = lastStats.avg;
+  document.getElementById('s-max').textContent = lastStats.max;
+  updateQueueVisual(stats.queue_depth || 0);
+
+  const openInfo = document.getElementById('info');
+  if (openInfo.style.display === 'block') {
+    const title = document.getElementById('info-title').textContent;
+    const key = Object.keys(NODE_INFO).find(k => NODE_INFO[k].title === title);
+    if (key) showInfo(key);
+  }
+}
+
+function applyEvents(events) {
+  const dilation = Number(document.getElementById('dilation').value);
+  const rateCap = Number(document.getElementById('rate-cap').value);
+  const minGapMs = 1000 / rateCap;
+  const now = performance.now();
+
+  for (const e of events) {
+    if (now - lastSpawnTime < minGapMs) continue; // visual rate limiting, not data loss
+    lastSpawnTime = now;
+
+    const path = pathFor(e.type);
+    const color = packetColor(e.type);
+    const duration = e.type === 'processed'
+      ? Math.max(120, Math.min(dilation * 3, (e.latency_ns / 1000) * (dilation / 50)))
+      : dilation;
+    spawnPacket(path, color, duration);
+    if (e.type === 'processed') pulseWorker(e.worker_id || 0);
+  }
+}
+
+document.getElementById('connect-btn').addEventListener('click', () => {
+  connect(document.getElementById('ws-url').value.trim());
+});
+document.getElementById('dilation').addEventListener('input', (ev) => {
+  document.getElementById('dilation-val').textContent = ev.target.value;
+});
+document.getElementById('rate-cap').addEventListener('input', (ev) => {
+  document.getElementById('rate-val').textContent = ev.target.value;
+});
+
+/* ---------- bench paste-and-render panel ---------- */
+document.getElementById('bench-parse').addEventListener('click', () => {
+  const text = document.getElementById('bench-input').value;
+  const rows = [];
+  const re = /(mutex|spsc|disruptor)\s+count=(\d+)\s+p50=\s*(\d+)ns\s+p99=\s*(\d+)ns\s+p99\.9=\s*(\d+)ns\s+max=\s*(\d+)ns/g;
+  let m;
+  let maxVal = 1;
+  while ((m = re.exec(text)) !== null) {
+    const row = { name: m[1], p50: +m[3], p99: +m[4], p999: +m[5], max: +m[6] };
+    rows.push(row);
+    maxVal = Math.max(maxVal, row.max);
+  }
+  const container = document.getElementById('bench-bars');
+  container.innerHTML = '';
+  if (rows.length === 0) {
+    container.innerHTML = '<div style="color:var(--muted)">No recognizable queue_bench lines found.</div>';
+    return;
+  }
+  for (const row of rows) {
+    for (const metric of ['p50', 'p99', 'p999', 'max']) {
+      const pct = Math.max(2, (row[metric] / maxVal) * 100);
+      const div = document.createElement('div');
+      div.className = 'bar-row';
+      div.innerHTML = `<div class="label">${row.name}.${metric}</div>
+        <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+        <div class="bar-val">${row[metric].toLocaleString()} ns</div>`;
+      container.appendChild(div);
+    }
+  }
+});
+
+/* ---------- render loop ---------- */
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+window.addEventListener('resize', onResize);
+
+function animate() {
+  requestAnimationFrame(animate);
+  const now = performance.now();
+  updatePackets(now);
+  workerSpheres.forEach(s => { s.scale.setScalar(THREE.MathUtils.lerp(s.scale.x, 1, 0.1)); });
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+/* auto-connect on load using the default URL */
+connect(document.getElementById('ws-url').value.trim());
+</script>
+</body>
+</html>

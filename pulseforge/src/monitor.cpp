@@ -78,6 +78,7 @@ void print_dashboard(SharedStats &s, Snapshot &prev, uint64_t now,
     uint64_t gaps      = load(s.sequence_gaps);
     uint64_t reorders  = load(s.reorders);
     uint64_t qfull     = load(s.queue_full);
+    uint64_t recovered = load(s.recovered);
     uint64_t processed = load(s.processed);
     uint64_t qdepth    = load(s.queue_depth);
     uint64_t lat_total = load(s.latency_total_ns);
@@ -109,6 +110,7 @@ void print_dashboard(SharedStats &s, Snapshot &prev, uint64_t now,
     std::printf("  gaps          %12" PRIu64 "\n", gaps);
     std::printf("  reorders      %12" PRIu64 "\n", reorders);
     std::printf("  queue full    %12" PRIu64 "\n", qfull);
+    std::printf("  recovered     %12" PRIu64 "\n", recovered);
     std::printf("  queue depth   %12" PRIu64 "\n", qdepth);
     std::printf("  processed     %12" PRIu64 "   (+%.0f/s)\n", processed, proc_rate);
     std::printf("  avg latency   %12.1f us\n", avg_us);

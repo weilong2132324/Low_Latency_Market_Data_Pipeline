@@ -5,13 +5,13 @@
  * the shared statistics (processed count, latency total/max, and the
  * queue-depth gauge).
  *
- * Ownership: the caller owns the QueueMutex and SharedStats objects and
- * must keep them alive for the worker's lifetime. The worker never
- * frees them; it only holds borrowed pointers.
+ * Ownership: the caller owns the IQueueConsumer and SharedStats objects
+ * and must keep them alive for the worker's lifetime. The worker never
+ * frees them; it only holds a borrowed pointer.
  *
- * Thread-safety: each worker runs independently. Many workers may share
- * one queue (the mutex queue is MPSC-safe). All shared counters are
- * atomic.
+ * Thread-safety: each worker runs independently against its own
+ * IQueueConsumer handle (see queue_backend.hpp for what "its own" means
+ * per backend). All shared counters are atomic.
  */
 
 #ifndef PULSEFORGE_WORKER_HPP
@@ -19,14 +19,16 @@
 
 #include <cstdint>
 
-#include "queue_mutex.hpp"
+#include "queue_backend.hpp"
+#include "shared_events.hpp"
 #include "stats.hpp"
 
 struct WorkerConfig {
-    QueueMutex *queue;             /* borrowed: caller-owned queue   */
+    IQueueConsumer *queue;          /* borrowed: caller-owned consumer handle */
     SharedStats *stats;            /* borrowed: caller-owned stats   */
     uint64_t slow_consumer_us = 0; /* artificial delay per message   */
     int worker_id = 0;             /* 0-based, for logging           */
+    SharedEventRing *events = nullptr; /* borrowed; nullptr = telemetry off */
 };
 
 /* Thread entry point. Runs until the queue is closed and drained.

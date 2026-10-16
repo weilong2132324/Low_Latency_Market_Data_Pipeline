@@ -62,7 +62,7 @@ private:
     do {                                                                   \
         if ((call) < 0) {                                                  \
             throw SystemError((what), errno);                              \
-        }                                      z                           \
+        }                                                                  \
     } while (0)
 
 /*

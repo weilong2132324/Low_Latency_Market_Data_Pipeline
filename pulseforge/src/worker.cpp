@@ -31,11 +31,8 @@ void worker_run(WorkerConfig cfg) {
 
     for (;;) {
         auto rc = cfg.queue->pop(msg);
-        if (rc == QueueMutex::Status::Closed) {
+        if (rc == PopStatus::Closed) {
             break; /* closed and drained: time to go */
-        }
-        if (rc != QueueMutex::Status::Ok) {
-            continue; /* defensive; pop only returns Ok or Closed */
         }
 
         /*
@@ -70,6 +67,11 @@ void worker_run(WorkerConfig cfg) {
         }
 
         cfg.stats->queue_depth.store(cfg.queue->depth(), memory_order_relaxed);
+
+        if (cfg.events != nullptr) {
+            event_ring_record(*cfg.events, EventType::Processed, msg.sequence,
+                              now_ns(), lat, static_cast<uint32_t>(cfg.worker_id));
+        }
     }
 
     std::printf("  worker %d: processed %" PRIu64 "  avg latency %" PRIu64

@@ -32,13 +32,18 @@ moving parts:
    against the last-seen sequence, then enqueues the tick into a bounded
    queue with backpressure.
 
-3. **Bounded queue + workers** - a mutex + two-condition-variable FIFO
-   (capacity 4096, MPSC-safe). The receiver is the single producer; N
-   worker threads (`--workers`) are the consumers. Workers fold each
+3. **Queue backend + workers** - the receiver's single producer handle
+   and N worker threads' consumer handles come from one factory,
+   `make_queue_backend()` (`include/queue_backend.hpp`), which hides
+   which of three concrete queues is actually running behind `--queue`:
+   a mutex+condvar FIFO (`queue_mutex.hpp`), a lock-free SPSC ring
+   (`spsc_ring.hpp`), or a Disruptor-style broadcast ring
+   (`mpmc_fanout.hpp`) - see "Queue backends" below. Workers fold each
    message into the shared statistics (processed count, latency
    total/max, queue-depth gauge) and may be throttled with
    `--slow-consumer-us` as fault injection. Shutdown is a clean
-   "close the queue -> drain remaining items -> join workers" sequence.
+   "close the queue -> drain remaining items -> join workers" sequence
+   regardless of which backend is active.
 
 4. **Shared-memory monitor** (`bin/monitor`) - a *separate process* that
    opens the stats region (`shm_open` + `mmap MAP_SHARED`) and renders a
@@ -184,7 +189,7 @@ Latency/timing numbers vary per run.)
 | Option | Meaning |
 |---|---|
 | `--port PORT` | UDP port to bind |
-| `--queue mutex\|spsc` | queue backend (`mutex` now; `spsc` in Phase 4) |
+| `--queue mutex\|spsc\|disruptor` | queue backend (see "Queue backends" below) |
 | `--workers N` | consumer threads (default 1) |
 | `--pin-cpu CPU` | pin the receiver thread to a CPU |
 | `--slow-consumer-us US` | artificial worker delay per msg (fault injection) |
@@ -196,22 +201,148 @@ Latency/timing numbers vary per run.)
 ./bin/monitor --shared-memory-name /pulseforge_stats
 ```
 
+## Queue backends (Phase 2)
+
+Three interchangeable backends sit behind one factory
+(`include/queue_backend.hpp` / `make_queue_backend()`), picked with
+`--queue`:
+
+| Kind | Shape | Concurrency | Notes |
+|---|---|---|---|
+| `mutex` | work-sharing | MPSC-safe, any `--workers` | `std::mutex` + 2 condvars (`queue_mutex.hpp`); blocking pop. |
+| `spsc` | work-sharing | **single consumer only** (`--workers 1`) | Lock-free ring (`spsc_ring.hpp`); consumer busy-spins + yields instead of blocking. |
+| `disruptor` | **broadcast** | any `--workers`, each sees every message | Single-writer multi-reader ring (`mpmc_fanout.hpp`); `processed` in the summary is `workers x received`, not a shard. |
+
+`bin/queue_bench` drives the same synthetic workload through all three
+and prints p50/p99/p99.9/max latency side by side:
+
+```sh
+make bin/queue_bench
+./bin/queue_bench --count 200000 --workers 2
+```
+
+## Multicast + latency-shaving (Phase 2)
+
+Both publisher and receiver support `--transport unicast|multicast`.
+One publisher, many independent receiver *processes*, no per-subscriber
+send cost on the publisher:
+
+```sh
+./bin/receiver  --port 9200 --transport multicast --group 239.255.0.5 --shared-memory-name /pf_a &
+./bin/receiver  --port 9200 --transport multicast --group 239.255.0.5 --shared-memory-name /pf_b &
+./bin/publisher --port 9200 --transport multicast --group 239.255.0.5 --rate 5000 --count 5000
+```
+
+Latency-shaving flags on the receiver (each documented in
+`docs/kernel_bypass_next_steps.md` for what it buys on real hardware
+vs. this dev environment):
+
+| Flag | What it does |
+|---|---|
+| `--batch N` | `recvmmsg()`: N datagrams per syscall instead of 1 |
+| `--busy-poll US` | `SO_BUSY_POLL` (soft-fails cleanly where unsupported) |
+| `--bpf-filter` | classic-BPF filter drops invalid datagrams in-kernel |
+
+## TCP gap recovery (Phase 2)
+
+The live tick feed stays UDP (fast, lossy); repairing a detected
+sequence gap uses a separate TCP channel - this is the "why TCP vs UDP"
+story made concrete. The publisher can run a small TCP server
+remembering recently-generated messages; on a gap, the receiver issues
+an async (`std::async`/`std::future`) recovery request without blocking
+its own receive loop, and only the receive-loop thread ever pushes into
+the queue (preserving the SPSC/Disruptor single-writer invariant):
+
+```sh
+./bin/receiver  --snapshot-host 127.0.0.1 --snapshot-port 9501 --port 9500 --shared-memory-name /pf_r
+./bin/publisher --snapshot-port 9501 --port 9500 --rate 500 --count 500 --drop-every 23
+```
+
+The receiver's summary prints a `recovered` line; `monitor` shows it
+live. See `include/snapshot_protocol.hpp` for the wire format and
+`src/receiver.cpp`'s `kMaxPendingRecoveries` comment for a real lesson
+in why an unbounded "one recovery thread per gap" is a thundering-herd
+bug waiting to happen under heavy loss.
+
+## Telemetry + visualizer feed (Phase 3)
+
+The receiver can record every pipeline event (received, gap, recovered,
+processed, invalid, queue-full) into a second shared-memory ring;
+`telemetry_bridge` opens it (guest-only, like `monitor`) and streams it
+as JSON over a hand-rolled WebSocket server - no third-party WebSocket
+or JSON library, matching this project's "no external deps" rule
+(`include/ws_server.hpp`, `include/sha1.hpp`).
+
+```sh
+./bin/receiver --telemetry --port 9000 --shared-memory-name /pf_stats --events-shm-name /pf_events
+./bin/telemetry_bridge --shared-memory-name /pf_stats --events-shm-name /pf_events --ws-port 9700
+./bin/publisher --port 9000 --rate 2000 --count 20000 --drop-every 13
+```
+
+Then open `visualizer/index.html` (Phase 4, below) in a browser, or
+connect any WebSocket client to `ws://127.0.0.1:9700` directly - each
+frame is `{"stats": {...}, "events": [...]}`.
+
+## 3D visualizer (Phase 4)
+
+`pulseforge/visualizer/index.html` - a single static file (Three.js
+pinned via CDN, no build step, no React) that connects to
+`telemetry_bridge`'s WebSocket feed and renders the live pipeline:
+
+- **Packets flowing**: a small glowing sphere spawns per event and
+  travels along the real pipeline path (publisher &rarr; network &rarr;
+  receiver &rarr; queue &rarr; workers &rarr; telemetry), colored by
+  event type (white = normal, red = gap, blue = recovered via the TCP
+  channel, yellow = queue-full). A "time dilation" slider controls
+  playback speed since real latencies are microseconds - too fast to
+  watch directly.
+- **Hot vs. cold path**: receiver/queue/workers render in warm orange
+  (the latency-critical path); telemetry/recovery render in cool blue
+  (observability, off the critical path) - the literal hot/cold-path
+  requirement, rendered as color.
+- **Click-to-inspect**: click any node for a live side panel - its
+  current stats, a one-paragraph description of the concept it
+  demonstrates, and the source file it maps to.
+- **Latency-reduction view**: paste `./bin/queue_bench`'s real output
+  into the bottom-left panel to render its p50/p99/p99.9/max bars per
+  backend - actual measured numbers, not illustrative ones.
+
+```sh
+# three terminals + a browser:
+./bin/receiver --telemetry --port 9000
+./bin/telemetry_bridge
+./bin/publisher --port 9000 --rate 2000 --count 50000 --drop-every 17
+# then open pulseforge/visualizer/index.html (any static file server, or
+# directly as a file:// URL - it only needs outbound access to the
+# WebSocket port)
+```
+
+## Debugging labs (Phase 1)
+
+Two small, deliberately-broken standalone binaries for practicing with
+a debugger/sanitizer instead of reading about one:
+
+```sh
+./bin/deadlock_demo   # two threads lock two mutexes in opposite order and hang
+./bin/race_demo       # 8 threads increment a non-atomic counter with no sync
+```
+
+See `docs/debugging_labs.md` for the gdb/helgrind/TSan walkthroughs.
+
 ## Sanitizer builds
 
 ```sh
-make asan   # AddressSanitizer build
-make tsan   # ThreadSanitizer build (useful from Phase 3 on)
+make asan      # AddressSanitizer build
+make tsan      # ThreadSanitizer build - run bin/race_demo under it
+make helgrind  # prints the valgrind --tool=helgrind invocations
 ```
 
-## What is next
+## Project status
 
-- **Phase 3:** deadlock and data-race labs, ASan/TSan/Helgrind targets,
-  debugging documentation.
-- **Phase 4:** C++17-atomic lock-free SPSC ring, memory-ordering notes,
-  queue comparison scripts.
-- **Phase 5:** Disruptor-style fan-out, epoll/eventfd/timerfd,
-  CPU-affinity and `perf` exercises.
-- **Phase 6 (on request):** huge pages, mlockall, eBPF, DPDK concepts.
+All planned phases (0-5) are built: core concurrency primitives,
+multicast/kernel-adjacent networking, the telemetry bridge, and the 3D
+visualizer. See `docs/` for the write-ups behind each (memory ordering,
+debugging labs, kernel-bypass limits in WSL2, huge pages).
 
 ## Warning
 

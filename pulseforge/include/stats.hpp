@@ -36,7 +36,9 @@ struct SharedStats {
     std::atomic<uint64_t> sequence_gaps; /* missing sequence numbers observed */
     std::atomic<uint64_t> reorders;      /* out-of-order (older) sequence seen */
     std::atomic<uint64_t> queue_full;    /* times push found the queue full   */
-    uint64_t _pad1[3];                   /* 5*8 + 3*8 = 64 bytes -> own line  */
+    std::atomic<uint64_t> recovered;     /* ticks repaired via the TCP snapshot
+                                           * channel (see snapshot_protocol.hpp) */
+    uint64_t _pad1[2];                   /* 6*8 + 2*8 = 64 bytes -> own line  */
 
     /* --- worker-written group --- */
     std::atomic<uint64_t> processed;        /* messages consumed              */
@@ -62,6 +64,7 @@ inline void shared_stats_reset(SharedStats &s) {
     s.sequence_gaps.store(0, memory_order_relaxed);
     s.reorders.store(0, memory_order_relaxed);
     s.queue_full.store(0, memory_order_relaxed);
+    s.recovered.store(0, memory_order_relaxed);
     s.processed.store(0, memory_order_relaxed);
     s.latency_total_ns.store(0, memory_order_relaxed);
     s.latency_max_ns.store(0, memory_order_relaxed);
