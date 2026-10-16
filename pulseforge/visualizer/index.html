@@ -178,13 +178,71 @@
   <div id="bench-bars"></div>
 </div>
 
+<script>
+/*
+ * Global safety net: a <script type="module"> that throws during a
+ * STATIC import (a bad URL, a CDN hiccup, a browser that restricts ES
+ * modules on file:// pages) fails as a whole and runs NOTHING - not
+ * even the plain boxes that don't depend on the thing that broke. That
+ * previously meant "a bloom-related import 404s" => "the entire 3D
+ * scene is blank, forever, with no error visible anywhere but
+ * devtools." This plain classic-script block (always runs,
+ * independent of module loading) catches exactly that case and turns
+ * silence into an on-screen, readable error.
+ */
+window.addEventListener('error', (e) => {
+  showFatalError((e.error && e.error.message) || e.message || 'unknown script error');
+});
+window.addEventListener('unhandledrejection', (e) => {
+  showFatalError((e.reason && e.reason.message) || String(e.reason));
+});
+function showFatalError(message) {
+  let banner = document.getElementById('fatal-error');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'fatal-error';
+    banner.style.cssText = 'position:fixed;top:40%;left:50%;transform:translate(-50%,-50%);' +
+      'max-width:600px;background:#1a0b0e;border:1px solid #ff3366;color:#ffb4c4;' +
+      'padding:16px 20px;border-radius:8px;font-family:monospace;font-size:13px;' +
+      'z-index:9999;box-shadow:0 0 30px rgba(255,51,102,.4);';
+    banner.innerHTML = '<b>PulseForge Visualizer failed to load a script.</b><br><br>' +
+      'If you opened this file directly (file://), try serving it instead:<br>' +
+      '<code>cd pulseforge/visualizer && python3 -m http.server 8080</code><br>' +
+      'then open <code>http://localhost:8080</code>.<br><br>' +
+      '<span id="fatal-error-detail"></span>';
+    document.body.appendChild(banner);
+  }
+  const detail = document.getElementById('fatal-error-detail');
+  detail.textContent += (detail.textContent ? '\n' : '') + message;
+  const dbg = document.getElementById('debug-line');
+  if (dbg) dbg.textContent = 'ERROR: ' + message;
+  console.error('[PulseForge fatal]', message);
+}
+
+/*
+ * Pre-emptive check: opening this file directly (file://...index.html,
+ * e.g. by double-clicking it) is the single most common reason the 3D
+ * scene never appears. ES module imports (what every modern Three.js
+ * setup uses, this page included) are blocked by Chrome/Edge's module
+ * loader on the file:// origin, and are flaky-at-best elsewhere - this
+ * is a universal Three.js gotcha, not specific to this page (their own
+ * docs say the same). Detect it immediately, before even trying to
+ * load Three.js, so the fix is on screen in under a second instead of
+ * silence.
+ */
+if (window.location.protocol === 'file:') {
+  showFatalError(
+    "This page was opened as a file (" + window.location.href + "). " +
+    "Browsers block the ES module imports Three.js needs on file:// pages - " +
+    "serve this folder over HTTP instead:\n\n" +
+    "  cd pulseforge/visualizer && python3 -m http.server 8080\n\n" +
+    "then open http://localhost:8080/ in your browser."
+  );
+}
+</script>
 <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
-import { EffectComposer } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/OutputPass.js';
 
 /*
  * ---------- node descriptions (shown in the click-to-inspect panel) ----------
@@ -259,15 +317,43 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
 container.appendChild(renderer.domElement);
 
-/* Bloom post-processing - the single biggest "looks futuristic" lever:
+/*
+ * Bloom post-processing - the single biggest "looks futuristic" lever:
  * every emissive surface (hot/cold accents, packets, platform edges)
- * blooms into a soft neon glow instead of rendering as flat color. */
-const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
-const bloomPass = new UnrealBloomPass(
-  new THREE.Vector2(window.innerWidth, window.innerHeight), 0.85, 0.55, 0.28);
-composer.addPass(bloomPass);
-composer.addPass(new OutputPass());
+ * blooms into a soft neon glow instead of rendering as flat color.
+ *
+ * Loaded with a DYNAMIC import inside try/catch, deliberately NOT a
+ * static `import` at the top of the module: a static import that
+ * fails (CDN hiccup, a browser restricting modules on file://) takes
+ * the ENTIRE script down with it - none of the plain machine boxes
+ * below would render either, with no visible error. A dynamic import
+ * failing here just means bloom is skipped; the render loop falls back
+ * to a plain renderer.render() call (see animate() below).
+ */
+let composer = null, bloomPass = null;
+async function setupBloom() {
+  try {
+    const base = 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/';
+    const [{ EffectComposer }, { RenderPass }, { UnrealBloomPass }, { OutputPass }] =
+      await Promise.all([
+        import(base + 'EffectComposer.js'),
+        import(base + 'RenderPass.js'),
+        import(base + 'UnrealBloomPass.js'),
+        import(base + 'OutputPass.js'),
+      ]);
+    composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight), 0.85, 0.55, 0.28);
+    composer.addPass(bloomPass);
+    composer.addPass(new OutputPass());
+    logDebug('bloom post-processing loaded');
+  } catch (e) {
+    composer = null;
+    logDebug('bloom unavailable (' + e.message + ') - rendering without it, scene still works');
+  }
+}
+setupBloom();
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 1, 0);
@@ -708,8 +794,10 @@ function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  composer.setSize(window.innerWidth, window.innerHeight);
-  bloomPass.setSize(window.innerWidth, window.innerHeight);
+  if (composer) {
+    composer.setSize(window.innerWidth, window.innerHeight);
+    bloomPass.setSize(window.innerWidth, window.innerHeight);
+  }
 }
 window.addEventListener('resize', onResize);
 
@@ -735,7 +823,11 @@ function animate() {
   rimLight.intensity = 2.2 + Math.sin(t * 0.8) * 0.6;
 
   controls.update();
-  composer.render();
+  if (composer) {
+    composer.render();
+  } else {
+    renderer.render(scene, camera);
+  }
 }
 animate();
 

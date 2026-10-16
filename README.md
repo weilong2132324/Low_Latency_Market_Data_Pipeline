@@ -55,7 +55,10 @@ make clean
 ./bin/receiver --telemetry --port 9000
 ./bin/telemetry_bridge
 ./bin/publisher --port 9000 --rate 2000 --count 50000 --drop-every 17
-# then open pulseforge/visualizer/index.html in a browser
+# serve the visualizer - do NOT just double-click/open index.html:
+# browsers block the ES module imports it needs on file:// pages
+cd visualizer && python3 -m http.server 8080
+# then open http://localhost:8080/ in a browser
 ```
 
 **Debugging labs:**
@@ -335,9 +338,10 @@ or JSON library, matching this project's "no external deps" rule
 ./bin/publisher --port 9000 --rate 2000 --count 20000 --drop-every 13
 ```
 
-Then open `visualizer/index.html` (Phase 4, below) in a browser, or
-connect any WebSocket client to `ws://127.0.0.1:9700` directly - each
-frame is `{"stats": {...}, "events": [...]}`.
+Then serve and open `visualizer/index.html` (Phase 4, below - don't
+open it as a bare `file://` URL), or connect any WebSocket client to
+`ws://127.0.0.1:9700` directly - each frame is
+`{"stats": {...}, "events": [...]}`.
 
 ## 3D visualizer (Phase 4)
 
@@ -368,10 +372,15 @@ pinned via CDN, no build step, no React) that connects to
 ./bin/receiver --telemetry --port 9000
 ./bin/telemetry_bridge
 ./bin/publisher --port 9000 --rate 2000 --count 50000 --drop-every 17
-# then open pulseforge/visualizer/index.html (any static file server, or
-# directly as a file:// URL - it only needs outbound access to the
-# WebSocket port)
+# serve the visualizer folder (do NOT open index.html directly as a
+# file:// URL - browsers block the ES module imports it needs there):
+cd visualizer && python3 -m http.server 8080
+# then open http://localhost:8080/ in a browser
 ```
+
+If the page loads but shows a red error banner instead of the scene,
+read the banner - it names the exact problem (usually this file://
+issue) and gives the fix.
 
 ## Debugging labs (Phase 1)
 
