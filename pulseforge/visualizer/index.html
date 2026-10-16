@@ -240,9 +240,30 @@ if (window.location.protocol === 'file:') {
   );
 }
 </script>
+
+<!--
+  Import map: three.js r150+ examples/jsm modules (OrbitControls,
+  EffectComposer, etc.) import the core library via the BARE specifier
+  "three" internally (e.g. `import * as THREE from 'three'`), expecting
+  a bundler or an import map to resolve it - a raw full-URL <script
+  type="module"> import of those files, with no import map, fails with
+  exactly: `Failed to resolve module specifier "three"`. This map is
+  what makes bare "three"/"three/addons/..." specifiers resolve to the
+  actual jsdelivr URLs, for both the static imports below AND any
+  dynamic import() calls (the bloom loader) - it must be declared
+  before any module script runs, so it comes first in the document.
+-->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
 <script type="module">
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
-import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 /*
  * ---------- node descriptions (shown in the click-to-inspect panel) ----------
@@ -333,7 +354,7 @@ container.appendChild(renderer.domElement);
 let composer = null, bloomPass = null;
 async function setupBloom() {
   try {
-    const base = 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/';
+    const base = 'three/addons/postprocessing/';
     const [{ EffectComposer }, { RenderPass }, { UnrealBloomPass }, { OutputPass }] =
       await Promise.all([
         import(base + 'EffectComposer.js'),
