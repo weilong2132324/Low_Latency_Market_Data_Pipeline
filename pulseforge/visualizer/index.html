@@ -4,83 +4,138 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PulseForge Visualizer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #0b0e14;
-    --panel: #11151f;
-    --panel-border: #232a3a;
-    --text: #d8dee9;
-    --muted: #7c8595;
-    --hot: #ff6b4a;
+    --bg: #05070c;
+    --panel: rgba(10, 16, 28, 0.72);
+    --panel-border: #1f3a52;
+    --text: #cfe8ff;
+    --muted: #5f7a93;
+    --hot: #ff5a3c;
     --hot-dim: #7a3626;
-    --cold: #4ab3ff;
-    --cold-dim: #26496b;
-    --ok: #4ade80;
-    --warn: #facc15;
-    --bad: #f87171;
+    --cold: #26e5ff;
+    --cold-dim: #0e4a63;
+    --ok: #39ffb0;
+    --warn: #ffd23f;
+    --bad: #ff3366;
+    --accent: #7c5cff;
   }
+  * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
-    font-family: ui-monospace, "SF Mono", Consolas, monospace; overflow: hidden; }
+    font-family: "Share Tech Mono", ui-monospace, "SF Mono", Consolas, monospace; overflow: hidden; }
   #scene { position: fixed; inset: 0; }
+
+  /* CRT-ish scanline + vignette overlay, purely cosmetic, never blocks clicks */
+  #overlay-fx { position: fixed; inset: 0; pointer-events: none; z-index: 5;
+    background:
+      repeating-linear-gradient(to bottom, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px, transparent 2px, transparent 4px),
+      radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.55) 100%);
+    mix-blend-mode: screen; opacity: 0.6; }
+
   .panel {
     position: fixed; background: var(--panel); border: 1px solid var(--panel-border);
-    border-radius: 8px; padding: 10px 14px; font-size: 12px; line-height: 1.5;
-    box-shadow: 0 4px 24px rgba(0,0,0,.4);
+    border-radius: 6px; padding: 10px 14px; font-size: 12px; line-height: 1.5;
+    box-shadow: 0 0 1px rgba(38,229,255,0.4) inset, 0 8px 30px rgba(0,0,0,.55), 0 0 18px rgba(38,229,255,0.06);
+    backdrop-filter: blur(10px) saturate(1.3);
+    -webkit-backdrop-filter: blur(10px) saturate(1.3);
   }
-  #topbar { top: 10px; left: 10px; right: 10px; display: flex; gap: 10px; align-items: center; }
-  #topbar input[type=text] { background: #0b0e14; border: 1px solid var(--panel-border);
-    color: var(--text); padding: 4px 8px; border-radius: 4px; width: 220px; font-size: 12px; }
-  #topbar button { background: #1b2130; border: 1px solid var(--panel-border); color: var(--text);
-    padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-  #topbar button:hover { border-color: var(--hot); }
-  #status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); flex: none; }
-  #status-dot.connected { background: var(--ok); }
-  #debug-line { position: fixed; top: 44px; left: 10px; right: 10px; font-size: 11px;
-    color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .panel h2, .panel h3 { font-family: "Orbitron", sans-serif; letter-spacing: 0.04em; }
+
+  #topbar { top: 10px; left: 10px; right: 10px; display: flex; gap: 12px; align-items: center;
+    padding: 10px 18px; }
+  #brand { font-family: "Orbitron", sans-serif; font-weight: 900; font-size: 15px; letter-spacing: 0.12em;
+    background: linear-gradient(90deg, var(--cold), var(--accent) 60%, var(--hot));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-shadow: 0 0 18px rgba(38,229,255,0.35); white-space: nowrap; }
+  #brand::after { content: ''; }
+  #topbar input[type=text] { background: #040810; border: 1px solid var(--panel-border);
+    color: var(--cold); padding: 5px 9px; border-radius: 4px; width: 210px; font-size: 12px;
+    font-family: "Share Tech Mono", monospace; outline: none; }
+  #topbar input[type=text]:focus { border-color: var(--cold); box-shadow: 0 0 8px rgba(38,229,255,0.4); }
+  #topbar button { background: linear-gradient(180deg, #16314a, #0c1c2c); border: 1px solid var(--cold-dim);
+    color: var(--cold); padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 11px;
+    letter-spacing: 0.08em; text-transform: uppercase; font-family: "Share Tech Mono", monospace;
+    transition: all .15s ease; }
+  #topbar button:hover { border-color: var(--cold); box-shadow: 0 0 14px rgba(38,229,255,0.55); color: #fff; }
+  #status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); flex: none;
+    box-shadow: 0 0 8px var(--bad), 0 0 2px var(--bad); }
+  #status-dot.connected { background: var(--ok); box-shadow: 0 0 10px var(--ok), 0 0 3px var(--ok);
+    animation: pulse-dot 1.6s ease-in-out infinite; }
+  @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+  #tagline { color: var(--muted); font-size: 11px; letter-spacing: 0.03em; }
+
+  #debug-line { position: fixed; top: 50px; left: 10px; right: 10px; font-size: 11px;
+    color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: "Share Tech Mono", monospace; z-index: 4; text-shadow: 0 0 6px rgba(38,229,255,0.2); }
+
   #legend { bottom: 10px; left: 10px; }
-  #legend .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:middle; }
-  #stats { top: 56px; left: 10px; width: 230px; }
+  #legend .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px;
+    vertical-align:middle; box-shadow: 0 0 6px currentColor; }
+  #legend .title { font-family: "Orbitron", sans-serif; font-size: 10px; letter-spacing: 0.08em;
+    color: var(--cold); text-transform: uppercase; margin-bottom: 6px; }
+
+  #stats { top: 60px; left: 10px; width: 230px; }
+  #stats .title { font-family: "Orbitron", sans-serif; font-size: 10px; letter-spacing: 0.1em;
+    color: var(--cold); text-transform: uppercase; margin-bottom: 6px; border-bottom: 1px solid var(--panel-border);
+    padding-bottom: 5px; }
   #stats table { width: 100%; border-collapse: collapse; }
-  #stats td { padding: 1px 0; }
-  #stats td.v { text-align: right; color: #fff; font-weight: 600; }
-  #info { top: 56px; right: 10px; width: 300px; display: none; }
-  #info h3 { margin: 0 0 6px 0; font-size: 13px; color: var(--hot); }
+  #stats td { padding: 2px 0; color: var(--muted); }
+  #stats td.v { text-align: right; color: var(--cold); font-weight: 600; text-shadow: 0 0 8px rgba(38,229,255,0.5); }
+
+  #info { top: 60px; right: 10px; width: 310px; display: none; border-color: var(--hot); }
+  #info h3 { margin: 0 0 8px 0; font-size: 13px; color: var(--hot); text-shadow: 0 0 10px rgba(255,90,60,0.5); }
   #info .desc { color: var(--muted); margin-bottom: 8px; }
   #info .src { color: var(--cold); font-size: 11px; }
+
   #controls { bottom: 10px; right: 10px; width: 260px; }
-  #controls label { display: block; margin-bottom: 6px; color: var(--muted); }
-  #controls input[type=range] { width: 100%; }
+  #controls .title, #bench .title { font-family: "Orbitron", sans-serif; font-size: 10px; letter-spacing: 0.1em;
+    color: var(--cold); text-transform: uppercase; margin-bottom: 8px; }
+  #controls label { display: block; margin-bottom: 8px; color: var(--muted); font-size: 11px; }
+  #controls input[type=range] { width: 100%; accent-color: var(--cold); }
+
   #bench { bottom: 10px; left: 260px; width: 320px; max-height: 220px; overflow: auto; }
-  #bench textarea { width: 100%; height: 70px; background: #0b0e14; color: var(--text);
-    border: 1px solid var(--panel-border); border-radius: 4px; font-size: 11px; resize: vertical; }
+  #bench textarea { width: 100%; height: 70px; background: #040810; color: var(--cold);
+    border: 1px solid var(--panel-border); border-radius: 4px; font-size: 11px; resize: vertical;
+    font-family: "Share Tech Mono", monospace; }
   #bench button { margin-top: 6px; }
   .bar-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; }
   .bar-row .label { width: 60px; color: var(--muted); }
-  .bar-track { flex: 1; height: 10px; background: #1b2130; border-radius: 4px; overflow: hidden; }
-  .bar-fill { height: 100%; background: linear-gradient(90deg, var(--cold), var(--hot)); }
+  .bar-track { flex: 1; height: 10px; background: #0c1420; border-radius: 4px; overflow: hidden;
+    border: 1px solid rgba(38,229,255,0.15); }
+  .bar-fill { height: 100%; background: linear-gradient(90deg, var(--cold), var(--accent), var(--hot));
+    box-shadow: 0 0 8px rgba(38,229,255,0.6); }
   .bar-val { width: 70px; text-align: right; color: var(--muted); }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: var(--cold-dim); border-radius: 3px; }
 </style>
 </head>
 <body>
 <div id="scene"></div>
+<div id="overlay-fx"></div>
 
 <div id="topbar" class="panel">
+  <span id="brand">PULSEFORGE</span>
   <span id="status-dot"></span>
   <span id="status-text">disconnected</span>
   <input id="ws-url" type="text" value="ws://127.0.0.1:9700" />
   <button id="connect-btn">Connect</button>
-  <span style="color:var(--muted)">PulseForge Visualizer - click a component to inspect it</span>
+  <span id="tagline">live market-data pipeline, 3 machines, click a component to inspect it</span>
 </div>
 <div id="debug-line">waiting for connection...</div>
 
 <div id="legend" class="panel">
-  <div style="margin-bottom:4px; color:var(--text)">3 machines, 1 lab box (loopback stands in for a real network):</div>
-  <div><span class="swatch" style="background:#9aa3b2"></span>Machine A - Exchange Gateway</div>
-  <div><span class="swatch" style="background:var(--hot)"></span>Machine B - Trading Receiver (hot path)</div>
-  <div><span class="swatch" style="background:var(--cold)"></span>Machine C - Monitoring Host (cold path)</div>
+  <div class="title">Topology</div>
+  <div><span class="swatch" style="background:#9aa3b2; color:#9aa3b2"></span>Machine A - Exchange Gateway</div>
+  <div><span class="swatch" style="background:var(--hot); color:var(--hot)"></span>Machine B - Trading Receiver (hot path)</div>
+  <div><span class="swatch" style="background:var(--cold); color:var(--cold)"></span>Machine C - Monitoring Host (cold path)</div>
 </div>
 
 <div id="stats" class="panel">
+  <div class="title">Live stats</div>
   <table>
     <tr><td>received</td><td class="v" id="s-received">0</td></tr>
     <tr><td>invalid</td><td class="v" id="s-invalid">0</td></tr>
@@ -102,6 +157,7 @@
 </div>
 
 <div id="controls" class="panel">
+  <div class="title">Controls</div>
   <label>Time dilation: <span id="dilation-val">400</span> ms per packet
     <input id="dilation" type="range" min="80" max="1500" value="400" />
   </label>
@@ -111,7 +167,8 @@
 </div>
 
 <div id="bench" class="panel">
-  <div style="color:var(--muted); margin-bottom:4px;">Latency-reduction view - paste real
+  <div class="title">Latency reduction</div>
+  <div style="color:var(--muted); margin-bottom:4px;">paste real
     <code>./bin/queue_bench</code> output below:</div>
   <textarea id="bench-input" placeholder="queue_bench: count=... workers=...
   mutex       count=...  p50=...ns  p99=...ns  p99.9=...ns  max=...ns
@@ -124,6 +181,10 @@
 <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+import { EffectComposer } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/OutputPass.js';
 
 /*
  * ---------- node descriptions (shown in the click-to-inspect panel) ----------
@@ -185,8 +246,8 @@ const NODE_INFO = {
 /* ---------- scene setup ---------- */
 const container = document.getElementById('scene');
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b0e14);
-scene.fog = new THREE.Fog(0x0b0e14, 30, 85);
+scene.background = new THREE.Color(0x030509);
+scene.fog = new THREE.FogExp2(0x030509, 0.016);
 
 const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 300);
 camera.position.set(0, 13, 32);
@@ -194,37 +255,77 @@ camera.position.set(0, 13, 32);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
 container.appendChild(renderer.domElement);
+
+/* Bloom post-processing - the single biggest "looks futuristic" lever:
+ * every emissive surface (hot/cold accents, packets, platform edges)
+ * blooms into a soft neon glow instead of rendering as flat color. */
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight), 0.85, 0.55, 0.28);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 1, 0);
 controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.35; /* slow holographic drift when idle */
+controls.minDistance = 8;
+controls.maxDistance = 70;
 
-scene.add(new THREE.AmbientLight(0x404060, 1.2));
-const dir = new THREE.DirectionalLight(0xffffff, 0.8);
-dir.position.set(5, 10, 5);
+scene.add(new THREE.AmbientLight(0x2a3a5a, 0.9));
+const dir = new THREE.DirectionalLight(0xbfe8ff, 0.6);
+dir.position.set(5, 14, 8);
 scene.add(dir);
+const rimLight = new THREE.PointLight(0x7c5cff, 2.5, 60, 2);
+rimLight.position.set(0, 6, -10);
+scene.add(rimLight);
 
-const floorGeo = new THREE.PlaneGeometry(100, 50);
-const floorMat = new THREE.MeshStandardMaterial({ color: 0x11151f, roughness: 1 });
+const floorGeo = new THREE.PlaneGeometry(140, 70);
+const floorMat = new THREE.MeshStandardMaterial({ color: 0x060a12, roughness: 1, metalness: 0.1 });
 const floor = new THREE.Mesh(floorGeo, floorMat);
 floor.rotation.x = -Math.PI / 2;
 floor.position.y = -0.01;
 scene.add(floor);
-const grid = new THREE.GridHelper(100, 50, 0x1b2130, 0x161b26);
+const grid = new THREE.GridHelper(140, 70, 0x113049, 0x0a1a28);
+grid.material.transparent = true;
+grid.material.opacity = 0.55;
 scene.add(grid);
 
-const HOT = 0xff6b4a, COLD = 0x4ab3ff, NEUTRAL = 0x9aa3b2;
+/* Ambient data-particle field - faint drifting points for atmosphere. */
+{
+  const count = 600;
+  const positions = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    positions[i * 3]     = (Math.random() - 0.5) * 120;
+    positions[i * 3 + 1] = Math.random() * 18;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 60;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const mat = new THREE.PointsMaterial({ color: 0x4ab3ff, size: 0.05, transparent: true, opacity: 0.5 });
+  const points = new THREE.Points(geo, mat);
+  scene.add(points);
+  window.__pfParticles = points; /* drifted in the render loop below */
+}
+
+const HOT = 0xff5a3c, COLD = 0x26e5ff, NEUTRAL = 0x9aa3b2, ACCENT = 0x7c5cff;
 
 /* ---------- machine platforms ---------- */
 /* Each "machine" is a raised, tinted plate - a stand-in for a separate
  * physical host. Components sit on top of their machine's plate; the
  * gaps BETWEEN plates are where the real network hops (UDP, TCP,
  * WebSocket) are drawn, so "packet crosses a gap" visually means
- * "packet crosses a machine boundary". */
+ * "packet crosses a machine boundary". Edge outlines "breathe" (pulse
+ * opacity) in the render loop below for a holographic-platform feel. */
+const platformEdges = [];
 function addMachinePlatform(centerX, width, depth, tint, label) {
   const geo = new THREE.BoxGeometry(width, 0.25, depth);
-  const mat = new THREE.MeshStandardMaterial({ color: tint, transparent: true, opacity: 0.22, roughness: 1 });
+  const mat = new THREE.MeshStandardMaterial({ color: tint, emissive: tint, emissiveIntensity: 0.15, transparent: true, opacity: 0.18, roughness: 1 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(centerX, -0.1, 0);
   scene.add(mesh);
@@ -233,7 +334,9 @@ function addMachinePlatform(centerX, width, depth, tint, label) {
     new THREE.LineBasicMaterial({ color: tint, transparent: true, opacity: 0.6 })
   );
   edges.position.copy(mesh.position);
+  edges.userData.phase = Math.random() * Math.PI * 2;
   scene.add(edges);
+  platformEdges.push(edges);
   makeLabel(label, centerX, 4.4, 0, 5.5, 0.9, 30);
 }
 
@@ -271,7 +374,7 @@ addMachinePlatform(X.telemetry, 8, 7, COLD, 'MACHINE C — MONITORING HOST (cold
 
 function addBoxNode(key, x, y, z, color, size = [1.6, 1.6, 1.6]) {
   const geo = new THREE.BoxGeometry(...size);
-  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25, roughness: 0.4 });
+  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.55, roughness: 0.35, metalness: 0.3 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(x, y, z);
   mesh.userData.nodeKey = key;
@@ -286,7 +389,7 @@ makeLabel('publisher', X.publisher, 2.3, 0);
 /* network: a translucent torus "cloud" */
 {
   const geo = new THREE.TorusKnotGeometry(1.1, 0.25, 80, 12);
-  const mat = new THREE.MeshStandardMaterial({ color: NEUTRAL, transparent: true, opacity: 0.55, roughness: 0.6 });
+  const mat = new THREE.MeshStandardMaterial({ color: NEUTRAL, emissive: NEUTRAL, emissiveIntensity: 0.3, transparent: true, opacity: 0.55, roughness: 0.6 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(X.network, 1.4, 0);
   mesh.userData.nodeKey = 'network';
@@ -318,7 +421,7 @@ const WORKER_COUNT = 3;
 const workerSpheres = [];
 for (let i = 0; i < WORKER_COUNT; i++) {
   const geo = new THREE.SphereGeometry(0.35, 16, 16);
-  const mat = new THREE.MeshStandardMaterial({ color: HOT, emissive: HOT, emissiveIntensity: 0.3 });
+  const mat = new THREE.MeshStandardMaterial({ color: HOT, emissive: HOT, emissiveIntensity: 0.5 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(X.workers, 1, (i - (WORKER_COUNT - 1) / 2) * 1.0);
   mesh.userData.nodeKey = 'workers';
@@ -605,16 +708,34 @@ function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
+  bloomPass.setSize(window.innerWidth, window.innerHeight);
 }
 window.addEventListener('resize', onResize);
+
+const clock = new THREE.Clock();
 
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
+  const t = clock.getElapsedTime();
+
   updatePackets(now);
   workerSpheres.forEach(s => { s.scale.setScalar(THREE.MathUtils.lerp(s.scale.x, 1, 0.1)); });
+
+  /* holographic "breathing" glow on the machine platform edges */
+  for (const e of platformEdges) {
+    e.material.opacity = 0.45 + Math.sin(t * 1.3 + e.userData.phase) * 0.25;
+  }
+  /* slow drift on the ambient particle field - a quiet sense of motion */
+  if (window.__pfParticles) {
+    window.__pfParticles.rotation.y = t * 0.01;
+    window.__pfParticles.position.y = Math.sin(t * 0.2) * 0.4;
+  }
+  rimLight.intensity = 2.2 + Math.sin(t * 0.8) * 0.6;
+
   controls.update();
-  renderer.render(scene, camera);
+  composer.render();
 }
 animate();
 
