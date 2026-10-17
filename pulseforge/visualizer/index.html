@@ -324,14 +324,14 @@ const NODE_INFO = {
   },
   queue: {
     title: 'Queue backend  —  Machine B (hot path)',
-    desc: 'One of three interchangeable backends behind a factory: mutex+condvar (work-sharing), lock-free SPSC ring (work-sharing, single consumer), or a Disruptor-style broadcast ring (every worker sees every message). Click an individual slot cube for that slot's own state.',
+    desc: 'One of three interchangeable backends behind a factory: mutex+condvar (work-sharing), lock-free SPSC ring (work-sharing, single consumer), or a Disruptor-style broadcast ring (every worker sees every message). Click an individual slot cube for that slot\'s own state.',
     src: 'include/queue_backend.hpp',
     statKeys: ['queue_depth', 'queue_full'],
     configKeys: ['queue_kind', 'workers'],
   },
   workers: {
     title: 'Worker pool  —  Machine B (hot path)',
-    desc: 'N consumer threads folding each tick into shared statistics (processed count, latency histogram). Atomic counters, relaxed ordering - see docs/memory_ordering.md. Click an individual sphere for that worker's own numbers.',
+    desc: 'N consumer threads folding each tick into shared statistics (processed count, latency histogram). Atomic counters, relaxed ordering - see docs/memory_ordering.md. Click an individual sphere for that worker\'s own numbers.',
     src: 'src/worker.cpp',
     statKeys: ['processed', 'avg', 'max'],
   },
