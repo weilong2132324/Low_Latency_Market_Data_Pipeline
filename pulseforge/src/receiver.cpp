@@ -352,6 +352,14 @@ int main(int argc, char **argv) {
                              cfg.events_shm_name.c_str());
                 return EXIT_SYSFAIL;
             }
+            /* Publish which networking/concurrency options THIS run
+             * chose, once, so the visualizer can show real config
+             * instead of guessing. */
+            shared_config_set(*events, static_cast<int>(cfg.transport),
+                              static_cast<int>(cfg.queue_kind), cfg.workers,
+                              cfg.batch, cfg.busy_poll_us, cfg.bpf_filter ? 1 : 0,
+                              !cfg.snapshot_host.empty() ? 1 : 0, cfg.port,
+                              cfg.group);
         }
 
         QueueBackend backend = make_queue_backend(

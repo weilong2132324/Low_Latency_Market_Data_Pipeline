@@ -61,13 +61,66 @@ struct Event {
     uint64_t latency_ns; /* meaningful for Processed/Recovered; 0 otherwise */
 };
 
+/*
+ * SharedConfig - which networking/concurrency options THIS run of the
+ * receiver actually chose (--transport, --queue, --batch, --busy-poll,
+ * --bpf-filter, --snapshot-host), written ONCE at startup so the
+ * visualizer can show real, live configuration instead of a static
+ * guess. Written entirely before `ready` is set (release); readers
+ * must check `ready` (acquire) first - the same happens-before pattern
+ * spsc_ring.hpp uses for its producer/consumer handoff, applied here
+ * to a single one-shot "publish" instead of a per-message one. Without
+ * that gate, a reader could observe `ready == 0` (fine, it waits) or
+ * `ready == 1` with some of the plain int fields still torn/stale -
+ * the ordering guarantee is exactly what the release/acquire pair
+ * rules out.
+ */
+struct SharedConfig {
+    /* No default member initializer: this struct is never constructed
+     * through normal C++ object lifetime, only reinterpret_cast onto
+     * raw mmap'd bytes (same as every other shared-memory struct in
+     * this codebase - see stats.hpp's top comment) - an initializer
+     * here would just be dead code. event_ring_reset() is what
+     * actually zeroes `ready` on the owner's create() path. */
+    std::atomic<int> ready;
+    int transport;             /* 0 = unicast, 1 = multicast           */
+    int queue_kind;            /* 0 = mutex, 1 = spsc, 2 = disruptor   */
+    int workers;
+    int batch;                 /* recvmmsg batch size; 1 = plain recvfrom */
+    int busy_poll_us;          /* -1 = SO_BUSY_POLL not set            */
+    int bpf_filter;            /* 0/1: classic-BPF filter attached     */
+    int recovery_enabled;      /* 0/1: --snapshot-host given           */
+    int port;
+    char multicast_group[32];
+};
+
 struct SharedEventRing {
+    SharedConfig           config;
     std::atomic<uint64_t> write_index; /* total events ever recorded */
     Event                 events[kEventRingCapacity];
 };
 
 inline void event_ring_reset(SharedEventRing &ring) {
     ring.write_index.store(0, std::memory_order_relaxed);
+    ring.config.ready.store(0, std::memory_order_relaxed);
+}
+
+inline void shared_config_set(SharedEventRing &ring, int transport, int queue_kind,
+                              int workers, int batch, int busy_poll_us, int bpf_filter,
+                              int recovery_enabled, int port,
+                              const std::string &multicast_group) {
+    SharedConfig &c = ring.config;
+    c.transport         = transport;
+    c.queue_kind        = queue_kind;
+    c.workers           = workers;
+    c.batch             = batch;
+    c.busy_poll_us      = busy_poll_us;
+    c.bpf_filter        = bpf_filter;
+    c.recovery_enabled  = recovery_enabled;
+    c.port              = port;
+    std::snprintf(c.multicast_group, sizeof(c.multicast_group), "%s",
+                  multicast_group.c_str());
+    c.ready.store(1, std::memory_order_release);
 }
 
 inline void event_ring_record(SharedEventRing &ring, EventType type,

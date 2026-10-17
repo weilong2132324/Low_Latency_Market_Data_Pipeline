@@ -52,9 +52,15 @@ make clean
 
 **Telemetry + 3D visualizer:**
 ```sh
-./bin/receiver --telemetry --port 9000
+# shows networking options (multicast, batch, busy-poll, bpf-filter,
+# TCP recovery) live in the visualizer's Networking panel - drop any
+# of these flags to see that row fall back to "off":
+./bin/receiver --telemetry --port 9000 --transport multicast --group 239.255.0.5 \
+               --batch 16 --busy-poll 50 --bpf-filter \
+               --snapshot-host 127.0.0.1 --snapshot-port 9501
 ./bin/telemetry_bridge
-./bin/publisher --port 9000 --rate 2000 --count 50000 --drop-every 17
+./bin/publisher --port 9000 --transport multicast --group 239.255.0.5 \
+                --snapshot-port 9501 --rate 2000 --count 50000 --drop-every 17
 # serve the visualizer - do NOT just double-click/open index.html:
 # browsers block the ES module imports it needs on file:// pages
 cd visualizer && python3 -m http.server 8080
@@ -360,9 +366,18 @@ pinned via CDN, no build step, no React) that connects to
   (the latency-critical path); telemetry/recovery render in cool blue
   (observability, off the critical path) - the literal hot/cold-path
   requirement, rendered as color.
-- **Click-to-inspect**: click any node for a live side panel - its
-  current stats, a one-paragraph description of the concept it
-  demonstrates, and the source file it maps to.
+- **Click-to-inspect, with a deep-dive layer**: click any node for a
+  live side panel - current stats, a one-paragraph description, the
+  source file it maps to, and (for network/receiver/queue/recovery) the
+  *actual* live config this run chose. Click an individual worker
+  sphere or queue slot cube for THAT worker's own processed/latency
+  numbers or that slot's fill state - not just the pool-wide aggregate.
+- **Networking panel**: a dedicated panel (bottom-left on connect, or
+  the reference flags before connecting) showing which transport
+  (unicast/multicast + group), `recvmmsg` batch size, `SO_BUSY_POLL`,
+  BPF filter, and TCP recovery are actually active on the connected
+  receiver - read live from a `SharedConfig` block the receiver
+  publishes once at startup, not guessed or hardcoded.
 - **Latency-reduction view**: paste `./bin/queue_bench`'s real output
   into the bottom-left panel to render its p50/p99/p99.9/max bars per
   backend - actual measured numbers, not illustrative ones.

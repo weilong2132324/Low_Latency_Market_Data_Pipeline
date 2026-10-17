@@ -97,6 +97,37 @@ const char *event_type_name(uint8_t type) {
     return "unknown";
 }
 
+/* Mirrors receiver.cpp's local `enum class Transport { Unicast,
+ * Multicast };` ordinal values (0, 1) - SharedConfig stores the plain
+ * int since shared memory can't carry a C++ enum type across process
+ * boundaries cleanly. */
+const char *transport_name(int t) { return t == 1 ? "multicast" : "unicast"; }
+
+/* Mirrors queue_backend.hpp's `enum class QueueKind { Mutex, Spsc,
+ * Disruptor };` ordinal values (0, 1, 2). */
+const char *queue_kind_name(int k) {
+    switch (k) {
+    case 1:  return "spsc";
+    case 2:  return "disruptor";
+    default: return "mutex";
+    }
+}
+
+/* Escapes the only character that actually shows up in a multicast
+ * group string or could otherwise break naive JSON - good enough for
+ * this one small, bounded field (no third-party JSON library, by
+ * design - see the file header comment). */
+std::string json_escape(const char *s) {
+    std::string out;
+    for (const char *p = s; *p; p++) {
+        if (*p == '"' || *p == '\\') {
+            out.push_back('\\');
+        }
+        out.push_back(*p);
+    }
+    return out;
+}
+
 template <typename T>
 T load(const std::atomic<T> &p) { return p.load(std::memory_order_relaxed); }
 
@@ -127,7 +158,24 @@ std::string build_snapshot_json(SharedStats &stats, SharedEventRing &events,
         << "\"queue_depth\":" << queue_depth << ','
         << "\"avg_latency_ns\":" << avg_lat << ','
         << "\"max_latency_ns\":" << lat_max
-        << "},\"events\":[";
+        << "},";
+
+    const SharedConfig &cfg = events.config;
+    if (cfg.ready.load(std::memory_order_acquire)) {
+        out << "\"config\":{"
+            << "\"transport\":\"" << transport_name(cfg.transport) << "\","
+            << "\"multicast_group\":\"" << json_escape(cfg.multicast_group) << "\","
+            << "\"queue_kind\":\"" << queue_kind_name(cfg.queue_kind) << "\","
+            << "\"workers\":" << cfg.workers << ','
+            << "\"batch\":" << cfg.batch << ','
+            << "\"busy_poll_us\":" << cfg.busy_poll_us << ','
+            << "\"bpf_filter\":" << (cfg.bpf_filter ? "true" : "false") << ','
+            << "\"recovery_enabled\":" << (cfg.recovery_enabled ? "true" : "false") << ','
+            << "\"port\":" << cfg.port
+            << "},";
+    }
+
+    out << "\"events\":[";
 
     uint64_t current = events.write_index.load(std::memory_order_relaxed);
     uint64_t count    = current - last_seen;

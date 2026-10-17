@@ -89,6 +89,21 @@
   #info h3 { margin: 0 0 8px 0; font-size: 13px; color: var(--hot); text-shadow: 0 0 10px rgba(255,90,60,0.5); }
   #info .desc { color: var(--muted); margin-bottom: 8px; }
   #info .src { color: var(--cold); font-size: 11px; }
+  #info .section-label { color: var(--accent); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.08em; margin: 8px 0 2px; }
+
+  #network-panel { top: 300px; left: 10px; width: 230px; }
+  #network-panel .title { font-family: "Orbitron", sans-serif; font-size: 10px; letter-spacing: 0.1em;
+    color: var(--cold); text-transform: uppercase; margin-bottom: 6px; border-bottom: 1px solid var(--panel-border);
+    padding-bottom: 5px; }
+  #network-panel .mode-row { display: flex; justify-content: space-between; align-items: baseline;
+    padding: 3px 0; border-bottom: 1px dotted rgba(38,229,255,0.1); }
+  #network-panel .mode-row .k { color: var(--muted); }
+  #network-panel .mode-row .v { color: var(--text); font-weight: 600; }
+  #network-panel .mode-row .v.on { color: var(--ok); text-shadow: 0 0 6px rgba(57,255,176,0.5); }
+  #network-panel .mode-row .v.off { color: var(--muted); }
+  #network-panel .hint { color: var(--muted); font-size: 10px; margin-top: 8px; line-height: 1.4; }
+  #network-panel code { color: var(--cold); }
 
   #controls { bottom: 10px; right: 10px; width: 260px; }
   #controls .title, #bench .title { font-family: "Orbitron", sans-serif; font-size: 10px; letter-spacing: 0.1em;
@@ -149,10 +164,19 @@
   </table>
 </div>
 
+<div id="network-panel" class="panel">
+  <div class="title">Networking</div>
+  <div id="net-rows"><!-- filled by renderNetworkPanel() once connected --></div>
+  <div class="hint">Every mode here is a real receiver/publisher flag,
+    not a UI toggle - restart them with different flags to switch
+    (e.g. <code>--transport multicast</code>). See README "Quick start".</div>
+</div>
+
 <div id="info" class="panel">
   <h3 id="info-title"></h3>
   <div class="desc" id="info-desc"></div>
   <table id="info-stats"></table>
+  <div id="info-extra"></div>
   <div class="src" id="info-src"></div>
 </div>
 
@@ -289,22 +313,25 @@ const NODE_INFO = {
     desc: 'The wire between the gateway and the receiver host. Lossy by design - --drop-every simulates loss; multicast lets one send reach many receiver machines at once.',
     src: 'include/multicast.hpp',
     statKeys: ['gaps', 'invalid'],
+    configKeys: ['transport', 'multicast_group', 'port'],
   },
   receiver: {
     title: 'Receiver  —  Machine B: Trading Receiver (hot path)',
     desc: 'Binds the UDP socket, validates datagrams, detects sequence gaps/reorders, and enqueues ticks with backpressure. --batch uses recvmmsg(); --busy-poll sets SO_BUSY_POLL; --bpf-filter attaches a classic-BPF kernel filter.',
     src: 'src/receiver.cpp',
     statKeys: ['received', 'invalid', 'gaps', 'queue_full'],
+    configKeys: ['batch', 'busy_poll_us', 'bpf_filter'],
   },
   queue: {
     title: 'Queue backend  —  Machine B (hot path)',
-    desc: 'One of three interchangeable backends behind a factory: mutex+condvar (work-sharing), lock-free SPSC ring (work-sharing, single consumer), or a Disruptor-style broadcast ring (every worker sees every message).',
+    desc: 'One of three interchangeable backends behind a factory: mutex+condvar (work-sharing), lock-free SPSC ring (work-sharing, single consumer), or a Disruptor-style broadcast ring (every worker sees every message). Click an individual slot cube for that slot's own state.',
     src: 'include/queue_backend.hpp',
     statKeys: ['queue_depth', 'queue_full'],
+    configKeys: ['queue_kind', 'workers'],
   },
   workers: {
     title: 'Worker pool  —  Machine B (hot path)',
-    desc: 'N consumer threads folding each tick into shared statistics (processed count, latency histogram). Atomic counters, relaxed ordering - see docs/memory_ordering.md.',
+    desc: 'N consumer threads folding each tick into shared statistics (processed count, latency histogram). Atomic counters, relaxed ordering - see docs/memory_ordering.md. Click an individual sphere for that worker's own numbers.',
     src: 'src/worker.cpp',
     statKeys: ['processed', 'avg', 'max'],
   },
@@ -313,6 +340,7 @@ const NODE_INFO = {
     desc: 'On a detected gap, Machine B issues an async (std::async/std::future) TCP request back to Machine A\'s snapshot server. Capped in-flight requests avoid a thundering-herd of recovery threads under heavy loss. This is the "UDP for speed, TCP for reliability" link.',
     src: 'include/snapshot_protocol.hpp',
     statKeys: ['recovered'],
+    configKeys: ['recovery_enabled'],
   },
   telemetry: {
     title: 'Telemetry bridge  —  Machine C: Monitoring Host (cold path)',
@@ -518,6 +546,7 @@ for (let i = 0; i < QUEUE_SLOTS; i++) {
   const spread = (i - (QUEUE_SLOTS - 1) / 2) * 0.45;
   mesh.position.set(X.queue, 0.3, spread);
   mesh.userData.nodeKey = 'queue';
+  mesh.userData.slotIndex = i;
   scene.add(mesh);
   queueSlotMeshes.push(mesh);
 }
@@ -532,6 +561,7 @@ for (let i = 0; i < WORKER_COUNT; i++) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(X.workers, 1, (i - (WORKER_COUNT - 1) / 2) * 1.0);
   mesh.userData.nodeKey = 'workers';
+  mesh.userData.workerId = i;
   scene.add(mesh);
   workerSpheres.push(mesh);
 }
@@ -566,31 +596,103 @@ addLine([X.workers, 1, 0], [X.telemetry, 1, 0], 0x274a63);
 addLine([X.publisher, 1, 0], [RECOVERY_MID.x, RECOVERY_MID.y, RECOVERY_MID.z], 0x274a63, true);
 addLine([RECOVERY_MID.x, RECOVERY_MID.y, RECOVERY_MID.z], [X.receiver, 1, 0], 0x274a63, true);
 
-/* ---------- click-to-inspect ---------- */
+/* ---------- click-to-inspect (deep dive) ---------- */
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let lastStats = {};
+let lastConfig = null; /* null until a live config frame arrives */
+let lastClicked = null; /* {key, slotIndex?, workerId?} - re-rendered on every update */
 
-function showInfo(key) {
+/* Per-worker numbers, accumulated client-side from the raw event
+ * stream's worker_id field (the aggregate `processed`/`avg`/`max` in
+ * `stats` can't be split by worker - this is the actual "deep dive" a
+ * single click into one worker sphere gives you that the top-level
+ * stats panel never could). */
+const workerStats = {}; /* workerId -> {processed, totalLatency, maxLatency} */
+
+const CONFIG_LABELS = {
+  transport: 'transport', multicast_group: 'mcast group', port: 'port',
+  batch: 'recvmmsg batch', busy_poll_us: 'busy-poll', bpf_filter: 'BPF filter',
+  queue_kind: 'queue backend', workers: 'worker count', recovery_enabled: 'TCP recovery',
+};
+
+function formatConfigValue(k, v) {
+  if (k === 'busy_poll_us') return v < 0 ? 'off' : (v + ' us');
+  if (k === 'bpf_filter' || k === 'recovery_enabled') return v ? 'ON' : 'off';
+  if (k === 'batch') return v <= 1 ? 'off (plain recvfrom)' : (v + ' msgs/syscall');
+  return String(v);
+}
+
+function showInfo(key, extra) {
   const info = NODE_INFO[key];
   if (!info) return;
+  lastClicked = { key, ...(extra || {}) };
   document.getElementById('info').style.display = 'block';
-  document.getElementById('info-title').textContent = info.title;
+
+  let title = info.title;
+  if (key === 'workers' && extra && extra.workerId !== undefined) {
+    title = `Worker #${extra.workerId}  —  Machine B (hot path)`;
+  } else if (key === 'queue' && extra && extra.slotIndex !== undefined) {
+    title = `Queue slot ${extra.slotIndex + 1} / ${QUEUE_SLOTS}  —  Machine B`;
+  }
+  document.getElementById('info-title').textContent = title;
   document.getElementById('info-desc').textContent = info.desc;
   document.getElementById('info-src').textContent = info.src;
+
   const statsEl = document.getElementById('info-stats');
   statsEl.innerHTML = '';
-  for (const k of info.statKeys) {
+  const addRow = (label, value, cls) => {
     const row = document.createElement('tr');
-    const label = document.createElement('td');
-    label.textContent = k;
-    label.style.color = 'var(--muted)';
-    const val = document.createElement('td');
-    val.style.textAlign = 'right';
-    val.style.color = '#fff';
-    val.textContent = (lastStats[k] !== undefined) ? lastStats[k] : '-';
-    row.appendChild(label); row.appendChild(val);
+    const td1 = document.createElement('td');
+    td1.textContent = label; td1.style.color = 'var(--muted)';
+    const td2 = document.createElement('td');
+    td2.style.textAlign = 'right'; td2.style.color = cls || '#fff';
+    td2.textContent = value;
+    row.appendChild(td1); row.appendChild(td2);
     statsEl.appendChild(row);
+  };
+
+  if (key === 'workers' && extra && extra.workerId !== undefined) {
+    /* This ONE worker's own numbers, not the pool aggregate. */
+    const w = workerStats[extra.workerId];
+    if (w) {
+      addRow('processed (this worker)', w.processed);
+      addRow('avg latency (this worker)', (w.totalLatency / w.processed / 1000).toFixed(1) + ' us');
+      addRow('max latency (this worker)', (w.maxLatency / 1000).toFixed(1) + ' us');
+    } else {
+      addRow('processed (this worker)', '0 (no events seen yet)');
+    }
+  } else if (key === 'queue' && extra && extra.slotIndex !== undefined) {
+    const depth = lastStats.queue_depth || 0;
+    const filled = Math.min(QUEUE_SLOTS, Math.round((depth / 64) * QUEUE_SLOTS));
+    addRow('this slot', extra.slotIndex < filled ? 'FILLED' : 'empty',
+           extra.slotIndex < filled ? 'var(--hot)' : 'var(--muted)');
+    addRow('queue depth (all slots)', depth + ' / 64 approx.');
+  } else {
+    for (const k of info.statKeys) {
+      addRow(k, (lastStats[k] !== undefined) ? lastStats[k] : '-');
+    }
+  }
+
+  const extraEl = document.getElementById('info-extra');
+  extraEl.innerHTML = '';
+  if (info.configKeys && info.configKeys.length) {
+    const label = document.createElement('div');
+    label.className = 'section-label';
+    label.textContent = lastConfig ? 'Live config (this run)' : 'Live config (not connected yet)';
+    extraEl.appendChild(label);
+    const table = document.createElement('table');
+    for (const k of info.configKeys) {
+      const row = document.createElement('tr');
+      const td1 = document.createElement('td');
+      td1.textContent = CONFIG_LABELS[k] || k; td1.style.color = 'var(--muted)';
+      const td2 = document.createElement('td');
+      td2.style.textAlign = 'right'; td2.style.color = 'var(--cold)';
+      td2.textContent = lastConfig ? formatConfigValue(k, lastConfig[k]) : '-';
+      row.appendChild(td1); row.appendChild(td2);
+      table.appendChild(row);
+    }
+    extraEl.appendChild(table);
   }
 }
 
@@ -600,10 +702,52 @@ renderer.domElement.addEventListener('click', (ev) => {
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObjects(scene.children, false);
   for (const hit of hits) {
-    const key = hit.object.userData && hit.object.userData.nodeKey;
-    if (key) { showInfo(key); return; }
+    const ud = hit.object.userData;
+    const key = ud && ud.nodeKey;
+    if (key) {
+      showInfo(key, { slotIndex: ud.slotIndex, workerId: ud.workerId });
+      return;
+    }
   }
 });
+
+/* ---------- static networking reference + live config panel ---------- */
+const NETWORK_MODES = [
+  { key: 'transport',   label: 'Transport',    flag: '--transport unicast|multicast' },
+  { key: 'batch',       label: 'recvmmsg batch', flag: '--batch N (receiver)' },
+  { key: 'busy_poll_us',label: 'SO_BUSY_POLL',  flag: '--busy-poll US (receiver)' },
+  { key: 'bpf_filter',  label: 'classic-BPF filter', flag: '--bpf-filter (receiver)' },
+  { key: 'recovery_enabled', label: 'TCP gap recovery', flag: '--snapshot-host/-port' },
+];
+
+function renderNetworkPanel() {
+  const el = document.getElementById('net-rows');
+  el.innerHTML = '';
+  for (const m of NETWORK_MODES) {
+    const row = document.createElement('div');
+    row.className = 'mode-row';
+    const k = document.createElement('span');
+    k.className = 'k'; k.textContent = m.label;
+    const v = document.createElement('span');
+    if (lastConfig) {
+      let onOff;
+      if (m.key === 'transport') onOff = '';
+      else if (m.key === 'busy_poll_us') onOff = lastConfig.busy_poll_us >= 0 ? 'on' : 'off';
+      else if (m.key === 'batch') onOff = lastConfig.batch > 1 ? 'on' : 'off';
+      else onOff = lastConfig[m.key] ? 'on' : 'off';
+      v.className = 'v ' + onOff;
+      v.textContent = m.key === 'transport'
+        ? lastConfig.transport + (lastConfig.transport === 'multicast' ? ` (${lastConfig.multicast_group})` : '')
+        : formatConfigValue(m.key, lastConfig[m.key]);
+    } else {
+      v.className = 'v off';
+      v.textContent = m.flag;
+    }
+    row.appendChild(k); row.appendChild(v);
+    el.appendChild(row);
+  }
+}
+renderNetworkPanel();
 
 /* ---------- packet animation ---------- */
 const packets = []; // {mesh, path: [Vector3...], t0, duration, color}
@@ -719,9 +863,16 @@ function connect(url) {
     const nEvents = Array.isArray(msg.events) ? msg.events.length : 0;
     logDebug(`frame ${framesReceived}: processed=${msg.stats ? msg.stats.processed : '?'}  new events=${nEvents}` +
              (nEvents === 0 && framesReceived <= 2 ? '  (no events yet - start the publisher, or it already finished before you connected)' : ''));
+    if (msg.config) applyConfig(msg.config);
     if (msg.stats) applyStats(msg.stats);
     if (Array.isArray(msg.events)) applyEvents(msg.events);
   };
+}
+
+function applyConfig(config) {
+  lastConfig = config;
+  renderNetworkPanel();
+  if (lastClicked) showInfo(lastClicked.key, lastClicked);
 }
 
 function applyStats(stats) {
@@ -741,11 +892,8 @@ function applyStats(stats) {
   document.getElementById('s-max').textContent = lastStats.max;
   updateQueueVisual(stats.queue_depth || 0);
 
-  const openInfo = document.getElementById('info');
-  if (openInfo.style.display === 'block') {
-    const title = document.getElementById('info-title').textContent;
-    const key = Object.keys(NODE_INFO).find(k => NODE_INFO[k].title === title);
-    if (key) showInfo(key);
+  if (lastClicked && lastClicked.workerId === undefined && lastClicked.slotIndex === undefined) {
+    showInfo(lastClicked.key); /* aggregate-only panels: refresh on every stats tick */
   }
 }
 
@@ -756,6 +904,17 @@ function applyEvents(events) {
   const now = performance.now();
 
   for (const e of events) {
+    /* Per-worker accumulation is NOT rate-limited - every processed
+     * event counts toward that worker's deep-dive numbers, even if its
+     * packet animation gets visually throttled below. */
+    if (e.type === 'processed') {
+      const w = workerStats[e.worker_id] || { processed: 0, totalLatency: 0, maxLatency: 0 };
+      w.processed++;
+      w.totalLatency += e.latency_ns;
+      if (e.latency_ns > w.maxLatency) w.maxLatency = e.latency_ns;
+      workerStats[e.worker_id] = w;
+    }
+
     if (now - lastSpawnTime < minGapMs) continue; // visual rate limiting, not data loss
     lastSpawnTime = now;
 
@@ -766,6 +925,11 @@ function applyEvents(events) {
       : dilation;
     spawnPacket(path, color, duration);
     if (e.type === 'processed') pulseWorker(e.worker_id || 0);
+  }
+
+  /* Live-refresh an open worker/slot deep-dive panel too. */
+  if (lastClicked && (lastClicked.workerId !== undefined || lastClicked.slotIndex !== undefined)) {
+    showInfo(lastClicked.key, lastClicked);
   }
 }
 
