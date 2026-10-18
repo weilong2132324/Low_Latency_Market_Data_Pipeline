@@ -591,8 +591,17 @@ int main(int argc, char **argv) {
             }
 
             for (;;) {
+                /*
+                 * MSG_WAITFORONE: block for the FIRST datagram only, then
+                 * take whatever else is already queued and return. Without
+                 * it, a blocking recvmmsg() waits until all `batch` slots
+                 * are filled - at 400 msgs/s with --batch 16 that parked
+                 * every tick for ~20 ms waiting for its batch-mates (found
+                 * via the visualizer: avg latency jumped from ~50 us to
+                 * 19 ms). Batching must amortise syscalls, never add delay.
+                 */
                 int n = recvmmsg(sock.get(), headers.data(), static_cast<unsigned>(cfg.batch),
-                                 0, nullptr);
+                                 MSG_WAITFORONE, nullptr);
                 if (n < 0) {
                     if (errno == EINTR) {
                         if (g_stop.load(std::memory_order_relaxed)) {

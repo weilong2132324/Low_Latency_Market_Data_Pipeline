@@ -41,6 +41,17 @@ uint64_t now_ns();
 uint64_t now_ns_monotonic();
 
 /*
+ * now_realtime_ns() - CLOCK_REALTIME (wall clock) in nanoseconds since the
+ * Unix epoch. The trading loop (exchange/trader) uses this one, on
+ * purpose: kernel receive timestamps (SO_TIMESTAMPING) are CLOCK_REALTIME,
+ * and so are exchange timestamps in real feeds - it is the clock PTP
+ * keeps synchronised across machines. To subtract a kernel timestamp from
+ * "now" you must read the same clock. (Within one host it is consistent;
+ * across hosts it is only as good as your clock sync.)
+ */
+uint64_t now_realtime_ns();
+
+/*
  * sleep_ns(ns) - sleep for at least ns nanoseconds (relative).
  * Returns 0 on success, or a positive error number on failure.
  * Loops on EINTR so a signal cannot truncate the sleep.

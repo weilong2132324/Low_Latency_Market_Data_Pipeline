@@ -79,6 +79,10 @@ public:
     Socket(int domain, int type, int protocol)
         : fd_(::socket(domain, type, protocol)) {}
 
+    /* Take ownership of an fd that already exists - e.g. one returned by
+     * accept(). From here on this object closes it. */
+    explicit Socket(int adopted_fd) noexcept : fd_(adopted_fd) {}
+
     ~Socket() { close(); }
 
     Socket(const Socket &) = delete;

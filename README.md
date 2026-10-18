@@ -17,12 +17,27 @@ block is independent - run just the ones you want.
 
 **Build:**
 ```sh
-make            # bin/publisher, receiver, monitor, deadlock_demo, race_demo, telemetry_bridge
-make test       # build + run all unit tests
+make            # bin/publisher, receiver, monitor, exchange, trader, labs, telemetry_bridge
+make test       # build + run all 13 unit test suites
 make bin/queue_bench
 make debug | make asan | make tsan   # alternate builds
 make clean
 ```
+
+**Trading loop: exchange + trader (order book, matching, order entry, tick-to-trade):**
+```sh
+bash scripts/run_trading.sh            # 15 s, both sides block in epoll_wait
+bash scripts/run_trading.sh spin       # both sides busy-poll, pinned to CPUs 1 and 2
+bash scripts/run_trading.sh gaps       # exchange drops packets; watch gap -> re-snapshot
+# or by hand, two terminals:
+./bin/exchange
+./bin/trader --duration 20 --verbose
+make bench-book       # std::map order book vs the ladder book
+make bench-protocol   # OUCH binary vs FIX text encode/decode
+```
+
+**Study guide:** [`pulseforge/docs/STUDY_GUIDE.md`](pulseforge/docs/STUDY_GUIDE.md) -
+the whole codebase as a course, file by file and concept by concept.
 
 **Basic pipeline (3 terminals):**
 ```sh
@@ -50,8 +65,9 @@ make clean
 ./bin/publisher --snapshot-port 9501 --port 9500 --rate 500 --count 500 --drop-every 23
 ```
 
-**Telemetry + 3D visualizer:**
+**Telemetry + 3D visualizer** (see `pulseforge/visualizer/README.md`):
 ```sh
+make topology   # export your real CPU/cache/NIC layout for the machine view
 # shows networking options (multicast, batch, busy-poll, bpf-filter,
 # TCP recovery) live in the visualizer's Networking panel - drop any
 # of these flags to see that row fall back to "off":
@@ -351,51 +367,99 @@ open it as a bare `file://` URL), or connect any WebSocket client to
 
 ## 3D visualizer (Phase 4)
 
-`pulseforge/visualizer/index.html` - a single static file (Three.js
-pinned via CDN, no build step, no React) that connects to
-`telemetry_bridge`'s WebSocket feed and renders the live pipeline:
+`pulseforge/visualizer/` - a static Three.js app (no build step) that is
+also a course: every click drills one layer deeper and opens a lesson
+(what it is, why HFT cares, typical latency, where PulseForge implements
+it, a command to try, interview questions with answers).
 
-- **Packets flowing**: a small glowing sphere spawns per event and
-  travels along the real pipeline path (publisher &rarr; network &rarr;
-  receiver &rarr; queue &rarr; workers &rarr; telemetry), colored by
-  event type (white = normal, red = gap, blue = recovered via the TCP
-  channel, yellow = queue-full). A "time dilation" slider controls
-  playback speed since real latencies are microseconds - too fast to
-  watch directly.
-- **Hot vs. cold path**: receiver/queue/workers render in warm orange
-  (the latency-critical path); telemetry/recovery render in cool blue
-  (observability, off the critical path) - the literal hot/cold-path
-  requirement, rendered as color.
-- **Click-to-inspect, with a deep-dive layer**: click any node for a
-  live side panel - current stats, a one-paragraph description, the
-  source file it maps to, and (for network/receiver/queue/recovery) the
-  *actual* live config this run chose. Click an individual worker
-  sphere or queue slot cube for THAT worker's own processed/latency
-  numbers or that slot's fill state - not just the pool-wide aggregate.
-- **Networking panel**: a dedicated panel (bottom-left on connect, or
-  the reference flags before connecting) showing which transport
-  (unicast/multicast + group), `recvmmsg` batch size, `SO_BUSY_POLL`,
-  BPF filter, and TCP recovery are actually active on the connected
-  receiver - read live from a `SharedConfig` block the receiver
-  publishes once at startup, not guessed or hardcoded.
-- **Latency-reduction view**: paste `./bin/queue_bench`'s real output
-  into the bottom-left panel to render its p50/p99/p99.9/max bars per
-  backend - actual measured numbers, not illustrative ones.
+- **Overview**: three machines (exchange gateway, trading receiver,
+  monitoring host) with live ticks flowing over the multicast feed, into
+  the queue's ring buffer and out to individual workers.
+- **Open a machine** (click it): chassis &rarr; motherboard (CPU socket,
+  DRAM, PCIe + NIC, NUMA node) &rarr; CPU die (your real cores and
+  L1/L2/L3 from `make topology`, with suggested thread placement)
+  &rarr; a single 64-byte cache line showing a real PulseForge struct
+  coloured by writer thread. False sharing is drawn as a line bouncing
+  between cores; a toggle deletes SharedStats' padding to show why it's
+  there.
+- **Open a cable** (click it): its protocol stack. A packet descends the
+  sender's stack gaining real headers (UDP 8 B, IP 20 B, Ethernet 14 B +
+  FCS), crosses the wire and a switch, and climbs the receiver's stack
+  shedding them. Click any layer for its byte layout filled with this
+  run's values (multicast group, derived multicast MAC, TTL, ports). A
+  **kernel bypass** toggle shows exactly which layers DPDK/ef_vi skip.
+- **Live or demo**: streams from `telemetry_bridge` when it's running,
+  otherwise runs on a clearly-labelled DEMO feed, and flips to LIVE
+  automatically when the backend appears.
 
 ```sh
-# three terminals + a browser:
+make && make topology
 ./bin/receiver --telemetry --port 9000
 ./bin/telemetry_bridge
 ./bin/publisher --port 9000 --rate 2000 --count 50000 --drop-every 17
-# serve the visualizer folder (do NOT open index.html directly as a
-# file:// URL - browsers block the ES module imports it needs there):
+# serve the folder - must be http://, not file:// (ES modules)
 cd visualizer && python3 -m http.server 8080
-# then open http://localhost:8080/ in a browser
+# open http://localhost:8080/
 ```
 
-If the page loads but shows a red error banner instead of the scene,
-read the banner - it names the exact problem (usually this file://
-issue) and gives the fix.
+The visualizer has already paid for itself once: it exposed a real bug
+where `recvmmsg()` without `MSG_WAITFORONE` waited for a full batch,
+pushing average latency from ~50 us to 19 ms at low message rates (see
+`src/receiver.cpp` and the socket-layer lesson).
+
+`pulseforge/visualizer/README.md` maps the visualizer's own code.
+
+## Trading loop (Phase 6)
+
+Two programs close the loop from market data to an order and back:
+
+```
+ bin/exchange (one thread, one epoll loop)            bin/trader (one thread)
+ ┌──────────────────────────────────────┐   ITCH/MoldUDP64   ┌──────────────────────────┐
+ │ synthetic flow ─┐                    │ ─── multicast ───▶ │ feed handler (gaps, seq)  │
+ │ OUCH gateway ───┼─▶ matching engine  │  239.255.0.2:9200  │  └▶ replica OrderBook     │
+ │  (TCP :9100)    │   price-time FIFO  │                    │      └▶ imbalance strategy│
+ │ snapshot        │   OrderBook/symbol │ ◀── OUCH/SoupBin ── │          └▶ risk gate     │
+ │  (TCP :9101) ◀──┘                    │      TCP :9100     │              └▶ order out │
+ └──────────────────────────────────────┘                    └──────────────────────────┘
+```
+
+- **Order book** (`include/order_book.hpp`): price ladder array +
+  occupancy bitmap scanned with `clz`/`ctz` + pooled intrusive FIFO per
+  level + open-addressing `FlatIdMap`. No allocation after construction.
+- **Matching engine** (`include/matching_engine.hpp`): price-time
+  priority, trades at the maker's price, IOC vs Day, self-match
+  prevention, venue-side validation; emits events to an `EngineListener`.
+- **Protocols**: ITCH 5.0 message layouts in MoldUDP64 packets
+  (`itch.hpp`), SoupBinTCP framing (`soupbin.hpp`), OUCH-5.0-style order
+  entry (`ouch.hpp`), a FIX 4.4 encoder/zero-copy parser (`fix.hpp`), all
+  on explicit big-endian helpers (`wire.hpp`).
+- **Trader**: subscribe → snapshot → replay (`feed_handler.hpp`); on a
+  sequence gap the book goes stale, open orders are pulled and the book
+  is rebuilt from a fresh snapshot. Pre-trade `RiskGate` (`risk.hpp`):
+  kill switch, fat-finger qty, notional, price collar, worst-case
+  position, open orders, rolling-window order rate.
+- **Kernel timestamps** (`net_timestamp.hpp`): `SO_TIMESTAMPING` software
+  RX stamps on market data and TX stamps (via the socket error queue) on
+  orders, so the report splits tick-to-trade into stages.
+
+Example report from WSL2, `run_trading.sh spin` (numbers vary by machine):
+
+```
+latency in ns                                    count      p50      p90      p99
+  exchange event -> kernel RX                       9004    12491    19891    70373
+  kernel RX -> user space (wakeup + recvmsg)        9137    10569    18233   180915
+  user space -> book updated (decode+apply)         9137     1327     2373     6010
+  book updated -> send() (strategy+risk+enc)         780     1422     4892    10076
+  TICK-TO-TRADE: kernel RX -> send() returned        780    39613    82661   484753
+  send() start -> ack in user space (RTT)            780    46003   102472   523502
+```
+
+In blocking mode the "kernel RX -> user space" row is ~97 us p50 (the
+scheduler wakeup); busy-polling cuts it to ~11 us. Benchmarks from the
+same machine: the ladder book is ~3.6x the throughput of a `std::map`
+book; FIX is 3.1x the bytes, ~40x slower to encode and ~15x slower to
+decode than the binary order.
 
 ## Debugging labs (Phase 1)
 
@@ -419,10 +483,11 @@ make helgrind  # prints the valgrind --tool=helgrind invocations
 
 ## Project status
 
-All planned phases (0-5) are built: core concurrency primitives,
-multicast/kernel-adjacent networking, the telemetry bridge, and the 3D
-visualizer. See `docs/` for the write-ups behind each (memory ordering,
-debugging labs, kernel-bypass limits in WSL2, huge pages).
+Phases 0-6 are built: core concurrency primitives,
+multicast/kernel-adjacent networking, the telemetry bridge, the 3D
+visualizer, and the trading loop (order book, matching engine, ITCH /
+OUCH / FIX, risk, SO_TIMESTAMPING tick-to-trade). See `docs/` for the
+write-ups behind each, starting with `docs/STUDY_GUIDE.md`.
 
 ## Warning
 

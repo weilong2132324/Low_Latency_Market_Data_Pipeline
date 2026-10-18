@@ -34,6 +34,16 @@ uint64_t now_ns_monotonic() {
            static_cast<uint64_t>(ts.tv_nsec);
 }
 
+uint64_t now_realtime_ns() {
+    timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+        std::perror("clock_gettime(CLOCK_REALTIME)");
+        return 0;
+    }
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
+           static_cast<uint64_t>(ts.tv_nsec);
+}
+
 int sleep_ns(uint64_t ns) {
     timespec ts;
     ts.tv_sec  = static_cast<time_t>(ns / 1000000000ULL);

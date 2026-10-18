@@ -30,7 +30,9 @@ bool send_full(int fd, const void *buf, size_t len) {
     const auto *p = static_cast<const unsigned char *>(buf);
     size_t sent = 0;
     while (sent < len) {
-        ssize_t n = send(fd, p + sent, len - sent, 0);
+        /* MSG_NOSIGNAL: a receiver that disconnects mid-response must not
+         * SIGPIPE-kill the publisher (see ws_server.cpp send_full) */
+        ssize_t n = send(fd, p + sent, len - sent, MSG_NOSIGNAL);
         if (n <= 0) {
             return false;
         }

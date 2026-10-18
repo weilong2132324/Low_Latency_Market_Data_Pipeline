@@ -11,3 +11,6 @@ build/
 # Core dumps
 core
 core.*
+
+# Machine-specific output of `make topology` (contains hostname + MACs)
+visualizer/data/hw_topology.json

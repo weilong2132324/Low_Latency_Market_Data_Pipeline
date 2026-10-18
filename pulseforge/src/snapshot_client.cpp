@@ -27,7 +27,7 @@ bool send_full(int fd, const void *buf, size_t len) {
     const auto *p = static_cast<const unsigned char *>(buf);
     size_t sent = 0;
     while (sent < len) {
-        ssize_t n = send(fd, p + sent, len - sent, 0);
+        ssize_t n = send(fd, p + sent, len - sent, MSG_NOSIGNAL); /* no SIGPIPE if the server vanished */
         if (n <= 0) {
             return false;
         }
